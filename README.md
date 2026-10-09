@@ -4,7 +4,7 @@ English | [日本語](README_ja.md)
 
 Touch Bar brightness control for Apple Silicon and T2 MacBook Pros, built to work the same way as Omarchy quattro's own brightness controls. It ships as an Omarchy shell plugin (`kazu.touchbar`) that can be installed from the Omarchy menu by its Git URL.
 
-- **Status bar widget**: looks like the built-in Display widget, with a brightness slider and a sync mode switch
+- **Status bar widget**: looks like the built-in Display widget, with sliders for the Touch Bar and the keyboard backlight and a sync mode switch
 - **Keys**: CTRL+brightness keys for ±5%, CTRL+ALT+brightness keys for ±1% (the same pattern as brightness / ALT+brightness for the display)
 - **Automatic sync**: follows the keyboard backlight (or the ambient light sensor), and goes dark with the display on the lock screen or when the lid is closed
 - **OSD**: brightness changes show on the Omarchy OSD (icon 󰌓)
@@ -90,7 +90,8 @@ To undo it, run `omarchy-brightness-touchbar-setup tiny-dfr --revert` (`uninstal
 - **Click**: open or close the panel
 - **Wheel**: ±5% (shows the OSD)
 - **Panel**
-  - BRIGHTNESS slider: Touch Bar brightness
+  - TOUCH BAR slider: Touch Bar brightness
+  - KEYBOARD slider: keyboard backlight brightness (0% turns it off). Like SHIFT+brightness, it pauses Omarchy's keyboard auto-brightness until the room light changes. In Keyboard sync mode the Touch Bar follows it
   - SYNC: switch between Keyboard / Ambient / Manual
   - Keyboard: j/k to move between sections, h/l to change the value or selection, Enter to confirm, Tab to the next panel
 
@@ -128,9 +129,12 @@ omarchy-brightness-touchbar off | on
 omarchy-brightness-touchbar-sync-mode     # print keyboard / ambient / off
 omarchy-brightness-touchbar-sync-mode ambient
 
+omarchy-brightness-keyboard-level         # print the keyboard backlight brightness (%)
+omarchy-brightness-keyboard-level 40%     # set it (0% turns it off; --no-osd also works)
+
 omarchy-hw-touchbar                       # name of the detected Touch Bar backlight device
 
-omarchy-shell kazu.touchbar state         # shell IPC (brightness <N> / syncMode <mode> / open / close / toggle)
+omarchy-shell kazu.touchbar state         # shell IPC (brightness <N> / keyboard <N> / syncMode <mode> / open / close / toggle)
 ```
 
 `omarchy brightness touchbar` does not work: the `omarchy` dispatcher only runs commands shipped in the Omarchy package.

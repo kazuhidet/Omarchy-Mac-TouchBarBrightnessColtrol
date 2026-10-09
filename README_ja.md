@@ -4,7 +4,7 @@
 
 Apple Silicon / T2 MacBook Pro の Touch Bar の輝度を、Omarchy quattro の輝度コントロールと同じ作法で扱うためのツール一式です。Omarchy シェルのプラグイン(`kazu.touchbar`)として配布でき、Omarchy のメニューから Git の URL を指定してインストールできます。
 
-- **ステータスバーのウィジェット**:Display ウィジェットと同じ見た目で、スライダーと同期モードの切り替えを提供
+- **ステータスバーのウィジェット**:Display ウィジェットと同じ見た目で、Touch Bar とキーボードバックライトのスライダー、同期モードの切り替えを提供
 - **キー操作**:CTRL+輝度キーで ±5%、CTRL+ALT+輝度キーで ±1%(画面用の 輝度キー / ALT+輝度キー と同じ並び)
 - **自動同期**:キーボードバックライト(または照度センサー)に連動。ロック画面での消灯や蓋を閉じたときは Touch Bar も消灯
 - **OSD**:輝度を変えると Omarchy の OSD に表示(アイコン 󰌓)
@@ -90,7 +90,8 @@ Display ウィジェットの隣に 󰌓 が表示されます。
 - **クリック**:パネルを開閉
 - **ホイール**:±5%(OSD を表示)
 - **パネル**
-  - BRIGHTNESS スライダー:Touch Bar の輝度
+  - TOUCH BAR スライダー:Touch Bar の輝度
+  - KEYBOARD スライダー:キーボードバックライトの輝度(0% で消灯)。SHIFT+輝度キーと同じく、Omarchy のキーボード自動調整を照度が変わるまで一時停止します。Keyboard 同期モードでは Touch Bar も連動します
   - SYNC:Keyboard / Ambient / Manual の切り替え
   - キーボード操作:j/k で項目移動、h/l で値・選択の変更、Enter で決定、Tab で隣のパネルへ
 
@@ -128,9 +129,12 @@ omarchy-brightness-touchbar off | on
 omarchy-brightness-touchbar-sync-mode     # keyboard / ambient / off を表示
 omarchy-brightness-touchbar-sync-mode ambient
 
+omarchy-brightness-keyboard-level         # キーボードバックライトの輝度(%)を表示
+omarchy-brightness-keyboard-level 40%     # 設定(0% で消灯。--no-osd も使える)
+
 omarchy-hw-touchbar                       # 検出した Touch Bar のバックライトデバイス名
 
-omarchy-shell kazu.touchbar state         # シェル IPC(brightness <N> / syncMode <mode> / open / close / toggle)
+omarchy-shell kazu.touchbar state         # シェル IPC(brightness <N> / keyboard <N> / syncMode <mode> / open / close / toggle)
 ```
 
 `omarchy brightness touchbar` の形では呼べません。`omarchy` コマンドは、Omarchy のパッケージに含まれるコマンドしか呼び出せないためです。

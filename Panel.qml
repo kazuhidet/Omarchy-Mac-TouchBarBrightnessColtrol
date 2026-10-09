@@ -5,9 +5,10 @@ import Quickshell.Io
 import qs.Ui
 import qs.Commons
 
-// Touch Bar brightness, modeled on the built-in Display panel (omarchy.monitor).
-// All hardware work goes through the CLI so the keys, the sync service and this
-// panel share one code path: omarchy-brightness-touchbar sets the level and
+// Touch Bar and keyboard backlight brightness, modeled on the built-in Display
+// panel (omarchy.monitor). All hardware work goes through the CLI so the keys, the
+// sync service and this panel share one code path: omarchy-brightness-touchbar and
+// omarchy-brightness-keyboard-level set the levels and
 // omarchy-brightness-touchbar-sync-mode switches the sync service. The commands
 // run from this plugin's own bin/, so the slider works right after
 // `omarchy plugin add`, before omarchy-brightness-touchbar-setup has linked them.
@@ -25,6 +26,14 @@ Panel {
   property bool brightnessSetQueued: false
   property bool brightnessAvailable: false
   property string syncMode: "off"
+
+  // Keyboard backlight. 0 is a valid level here (keys off), unlike the Touch Bar.
+  property int keyboardPercent: 0
+  property int pendingKeyboardPercent: 0
+  property bool keyboardSetQueued: false
+  property bool keyboardAvailable: false
+  // omarchy-brightness-keyboard-auto pauses after a manual write, like SHIFT+brightness.
+  property bool keyboardAuto: false
   // The sync service, key bindings and PATH links come from the setup command.
   property bool setupDone: true
   // tiny-dfr's AdaptiveBrightness rewrites the Touch Bar whenever the display
@@ -46,17 +55,24 @@ Panel {
 
   // Cursor model shared by keyboard and mouse, as in the Display panel:
   //   "brightness" - single slider row, selectedIndex = -1 sentinel
+  //   "keyboard"   - keyboard backlight slider row, selectedIndex = -1 sentinel
   //   "sync"       - horizontal row of sync mode pills
   //   "tinydfr"    - single fix button, only while tiny-dfr is adaptive
   property string focusSection: "brightness"
   property int selectedIndex: -1
   property bool cursorActive: false
 
-  readonly property var visibleSections: !brightnessAvailable ? []
-    : tinyDfrAdaptive ? ["brightness", "sync", "tinydfr"] : ["brightness", "sync"]
+  readonly property var visibleSections: {
+    var sections = []
+    if (brightnessAvailable) sections.push("brightness")
+    if (keyboardAvailable) sections.push("keyboard")
+    if (brightnessAvailable) sections.push("sync")
+    if (brightnessAvailable && tinyDfrAdaptive) sections.push("tinydfr")
+    return sections
+  }
 
   function sectionFirstIndex(section) {
-    if (section === "brightness") return -1
+    if (section === "brightness" || section === "keyboard") return -1
     if (section === "tinydfr") return 0
     return Math.max(0, syncModeIndex(syncMode))
   }
@@ -80,6 +96,10 @@ Panel {
   }
 
   function adjustBrightness(delta) {
+    if (focusSection === "keyboard" && keyboardAvailable) {
+      setKeyboard(root.keyboardPercent + delta)
+      return
+    }
     if (focusSection !== "brightness" || !brightnessAvailable) return
     setBrightness(root.brightnessPercent + delta)
   }
@@ -102,6 +122,12 @@ Panel {
     var n = Number(value)
     if (!isFinite(n)) return 1
     return Math.max(1, Math.min(100, Math.round(n)))
+  }
+
+  function clampKeyboard(value) {
+    var n = Number(value)
+    if (!isFinite(n)) return 0
+    return Math.max(0, Math.min(100, Math.round(n)))
   }
 
   function syncLabel(mode) {
@@ -134,10 +160,18 @@ Panel {
     return "got " + root.pendingBrightnessPercent
   }
 
+  function keyboardIpc(percent) {
+    root.setKeyboard(Number(percent))
+    return "got " + root.pendingKeyboardPercent
+  }
+
   function stateIpc() {
     return JSON.stringify({
       brightness: root.brightnessPercent,
       brightnessAvailable: root.brightnessAvailable,
+      keyboard: root.keyboardPercent,
+      keyboardAvailable: root.keyboardAvailable,
+      keyboardAuto: root.keyboardAuto,
       syncMode: root.syncMode,
       tinyDfrAdaptive: root.tinyDfrAdaptive
     })
@@ -147,6 +181,7 @@ Panel {
     target: "kazu.touchbar"
 
     function brightness(percent: string): string { return root.brightnessIpc(percent) }
+    function keyboard(percent: string): string { return root.keyboardIpc(percent) }
     function syncMode(mode: string): void { root.setSyncMode(mode) }
     function state(): string { return root.stateIpc() }
     function open() { root.open() }
@@ -160,6 +195,7 @@ Panel {
     // A read racing our own write can report the old level and bounce the
     // slider; the next tick picks up the settled value instead.
     if (setBrightnessProc.running || brightnessDebounce.running) return
+    if (setKeyboardProc.running || keyboardDebounce.running) return
     if (!stateProc.running) stateProc.running = true
   }
 
@@ -181,6 +217,26 @@ Panel {
   function previewBrightness(value) {
     root.brightnessPercent = clampBrightness(value)
     brightnessDebounce.restart()
+  }
+
+  function setKeyboard(value) {
+    var percent = clampKeyboard(value)
+    root.keyboardPercent = percent
+    root.pendingKeyboardPercent = percent
+
+    if (setKeyboardProc.running) {
+      root.keyboardSetQueued = true
+      return
+    }
+
+    root.keyboardSetQueued = false
+    setKeyboardProc.command = binCommand(["omarchy-brightness-keyboard-level", "--no-osd", percent + "%"])
+    setKeyboardProc.running = true
+  }
+
+  function previewKeyboard(value) {
+    root.keyboardPercent = clampKeyboard(value)
+    keyboardDebounce.restart()
   }
 
   function showBrightnessOsd(percent) {
@@ -227,7 +283,9 @@ Panel {
     command: root.binCommand(["bash", "-c",
       "omarchy-brightness-touchbar || echo unavailable; omarchy-brightness-touchbar-sync-mode; "
       + "[[ -f $HOME/.config/systemd/user/omarchy-brightness-touchbar-sync.service ]] && echo setup || echo missing; "
-      + "omarchy-brightness-touchbar-setup tiny-dfr --check"])
+      + "omarchy-brightness-touchbar-setup tiny-dfr --check; "
+      + "omarchy-brightness-keyboard-level 2>/dev/null || echo unavailable; "
+      + "systemctl --user is-active -q omarchy-brightness-keyboard-auto.service && echo auto || echo manual"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -239,9 +297,13 @@ Panel {
         root.syncMode = root.syncModeIndex(mode) >= 0 ? mode : "off"
         root.setupDone = String(lines[2] || "").trim() !== "missing"
         root.tinyDfrAdaptive = String(lines[3] || "").trim() === "adaptive"
-        if (!root.tinyDfrAdaptive && root.focusSection === "tinydfr") {
-          root.focusSection = "sync"
-          root.selectedIndex = root.sectionFirstIndex("sync")
+        var keyboard = String(lines[4] || "").trim()
+        root.keyboardAvailable = keyboard !== "unavailable" && keyboard !== ""
+        root.keyboardPercent = root.keyboardAvailable ? root.clampKeyboard(parseInt(keyboard, 10)) : 0
+        root.keyboardAuto = String(lines[5] || "").trim() === "auto"
+        if (root.visibleSections.indexOf(root.focusSection) < 0) {
+          root.focusSection = root.visibleSections.length ? root.visibleSections[0] : "brightness"
+          root.selectedIndex = root.sectionFirstIndex(root.focusSection)
         }
       }
     }
@@ -260,6 +322,22 @@ Panel {
     onRunningChanged: {
       if (running) return
       if (root.brightnessSetQueued) root.setBrightness(root.pendingBrightnessPercent)
+    }
+  }
+
+  Timer {
+    id: keyboardDebounce
+    interval: 180
+    repeat: false
+    onTriggered: root.setKeyboard(root.keyboardPercent)
+  }
+
+  Process {
+    id: setKeyboardProc
+    stdout: StdioCollector { waitForEnd: true }
+    onRunningChanged: {
+      if (running) return
+      if (root.keyboardSetQueued) root.setKeyboard(root.pendingKeyboardPercent)
     }
   }
 
@@ -308,7 +386,7 @@ Panel {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy)
         else if (dx !== 0) {
-          if (root.focusSection === "brightness") root.adjustBrightness(dx * 5)
+          if (root.focusSection === "brightness" || root.focusSection === "keyboard") root.adjustBrightness(dx * 5)
           else if (root.focusSection === "sync") root.moveCursorH(dx)
         }
       }
@@ -387,7 +465,7 @@ Panel {
 
             PanelSectionHeader {
               id: brightnessHeader
-              text: "BRIGHTNESS"
+              text: "TOUCH BAR"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               anchors.left: parent.left
@@ -444,6 +522,93 @@ Panel {
                 root.selectedIndex = -1
               }
             }
+          }
+        }
+
+        // ---------- Keyboard backlight ----------
+        PanelSeparator {
+          visible: root.keyboardAvailable
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          visible: root.keyboardAvailable
+          width: parent.width
+          spacing: Style.space(6)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(keyboardHeader.implicitHeight, keyboardPercentText.implicitHeight)
+
+            PanelSectionHeader {
+              id: keyboardHeader
+              text: "KEYBOARD"
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              id: keyboardPercentText
+              textFormat: Text.PlainText
+              text: {
+                var p = Math.round(keyboardSlider.dragging ? keyboardSlider.liveValue : root.keyboardPercent)
+                return p > 0 ? p + "%" : "OFF"
+              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          CursorSurface {
+            width: parent.width
+            height: keyboardSlider.implicitHeight + Style.spacing.controlGap
+            hasCursor: root.cursorActive && root.focusSection === "keyboard"
+            foreground: root.bar.foreground
+            outline: true
+
+            PanelSlider {
+              id: keyboardSlider
+              bar: root.bar
+              anchors.fill: parent
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              minimum: 0
+              maximum: 100
+              step: 1
+              value: root.keyboardPercent
+              integer: true
+              onMoved: function(v) { root.previewKeyboard(v) }
+              onReleased: function(v) {
+                keyboardDebounce.stop()
+                root.setKeyboard(v)
+              }
+            }
+
+            HoverHandler {
+              onHoveredChanged: if (hovered) {
+                root.cursorActive = true
+                root.focusSection = "keyboard"
+                root.selectedIndex = -1
+              }
+            }
+          }
+
+          Text {
+            visible: root.keyboardAuto
+            textFormat: Text.PlainText
+            text: "Adjusting by hand pauses keyboard auto-brightness until the room light changes."
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            width: parent.width
           }
         }
 

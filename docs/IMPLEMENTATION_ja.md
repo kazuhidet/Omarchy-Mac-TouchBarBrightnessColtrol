@@ -43,6 +43,15 @@ Touch Bar の輝度制御を Omarchy quattro の輝度まわりの仕様に合�
 | `off` / `on` | 画面用の display 版は DPMS を使うが、Touch Bar 版は `brightnessctl --save` で 0 にし、`--restore` で戻す |
 | OSD | `omarchy-osd -i <glyph> -p <%>`。`OsdModel.js` の `iconFor()` は登録されていない名前をそのまま文字として表示するので、Nerd Font の文字(󰌓)を直接渡している。キーボードバックライトの OSD(󰌌)とは別の文字にしている |
 
+### `omarchy-brightness-keyboard-level`
+
+Omarchy の `omarchy-brightness-keyboard` は 10% ずつの上げ下げ(`up` / `down` / `cycle` / `off` / `restore`)しかできないので、パネルのキーボードスライダーはこのコマンドで絶対値を設定します。引数なしなら現在の % を表示し、`N%` で設定します(0% も設定でき、消灯になります)。デバイスの探し方(最初の `*kbd_backlight*` の LED。`OMARCHY_LEDS_DIR` で差し替え可)と OSD のアイコン(`keyboard`)は `omarchy-brightness-keyboard` と同じです。
+
+LED への書き込み方は SHIFT+輝度キーを押したときと同じなので、既存の動きがそのまま当てはまります。
+
+- `omarchy-brightness-keyboard-auto` は、自分が書いていない値を見て、照度が変わるまで一時停止する。
+- keyboard モードの同期サービスは同期元の変化を検知し、Touch Bar も連動させる(一時停止中なら再開する)。
+
 ### `omarchy-brightness-touchbar-sync`
 
 `omarchy-brightness-keyboard-auto` と同じ構造です(`--once`、`--available`、`ExecCondition` での起動条件チェック)。LED や backlight の `brightness` は値が変わっても通知(uevent、inotify)が来ないので、1 秒ごとに読みに行きます。
@@ -103,11 +112,12 @@ Omarchy の Mac 向け版(`default/hypr/bindings/media.lua`)は、SHIFT+輝度�
 
 組み込みの Display ウィジェット(`plugins/panels/monitor/Panel.qml`)の構造をそのまま使っています。
 
-- `Panel` を元にし、`manageIpc: false` にして独自の `IpcHandler`(`brightness` / `syncMode` / `state` / `open` / `close` / `toggle`)を持たせている。
+- `Panel` を元にし、`manageIpc: false` にして独自の `IpcHandler`(`brightness` / `keyboard` / `syncMode` / `state` / `open` / `close` / `toggle`)を持たせている。
 - `BarIconButton`:クリックでパネルを開閉し、ホイールで ±5%。OSD は `bar.shell.summon("omarchy.osd", …)` で出す。
-- `KeyboardPanel` + `PanelKeyCatcher`:j/k/h/l/Enter のカーソル操作。sections は `brightness`(スライダー、selectedIndex は -1)、`sync`(ボタン 3 つ)、`tinydfr`(tiny-dfr が adaptive のときだけ出る修正ボタン)の 3 つ。
-- スライダーは Display と同じく、180ms のデバウンスと実行中の書き込みのキューイングで値を送る。書き込み中とデバウンス中は状態の読み直しをせず、スライダーが一瞬古い値に戻るのを防いでいる。
-- 同期サービスが Touch Bar の値を変えるので、パネルを開いている間は 2 秒ごとに状態を読み直す(Display は 5 秒ごと)。
+- `KeyboardPanel` + `PanelKeyCatcher`:j/k/h/l/Enter のカーソル操作。sections は `brightness`(Touch Bar のスライダー、selectedIndex は -1)、`keyboard`(キーボードバックライトのスライダー、selectedIndex は -1)、`sync`(ボタン 3 つ)、`tinydfr`(tiny-dfr が adaptive のときだけ出る修正ボタン)の 4 つ。デバイスがないセクションは出さない。
+- 各スライダーは Display と同じく、180ms のデバウンスと実行中の書き込みのキューイングで値を送る。書き込み中とデバウンス中は状態の読み直しをせず、スライダーが一瞬古い値に戻るのを防いでいる。
+- 同期サービスが Touch Bar の値を、キーボードの自動調整がキーボードの値を勝手に変えるので、パネルを開いている間は 2 秒ごとに状態を読み直す(Display は 5 秒ごと)。keyboard 同期モードでは、キーボードのスライダーを動かすと、次の読み直しで Touch Bar のスライダーも動く。
+- キーボードのスライダーの下の「自動調整が一時停止する」という説明は、`omarchy-brightness-keyboard-auto.service` が動いているときだけ出す。
 - コマンドは `Qt.resolvedUrl("bin")` で得たプラグイン内の `bin/` を PATH の先頭に置いて実行する。セットアップ前でも、`~/.local/bin` にある古い版があっても、プラグインに同梱した版が使われる。
 - 同期サービスのユニットがなければ、SYNC 欄にモード切替ボタンの代わりにセットアップボタンを出す。押すと `omarchy-launch-floating-terminal-with-presentation` で、ターミナル上でセットアップを実行する。
 

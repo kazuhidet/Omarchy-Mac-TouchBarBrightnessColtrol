@@ -25,6 +25,7 @@ commands=(
   omarchy-brightness-touchbar-sync
   omarchy-brightness-touchbar-sync-mode
   omarchy-brightness-touchbar-setup
+  omarchy-brightness-keyboard-level
 )
 
 begin_marker="-- >>> kazu.touchbar bindings >>>"

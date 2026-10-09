@@ -42,6 +42,15 @@ Follows the same spec as `omarchy-brightness-display`.
 | `off` / `on` | The display version uses DPMS; the Touch Bar version sets 0 with `brightnessctl --save` and comes back with `--restore` |
 | OSD | `omarchy-osd -i <glyph> -p <%>`. `iconFor()` in `OsdModel.js` shows an unknown name as literal text, so a Nerd Font glyph (󰌓) is passed directly. It is a different glyph from the keyboard backlight OSD (󰌌) |
 
+### `omarchy-brightness-keyboard-level`
+
+Omarchy's `omarchy-brightness-keyboard` only steps up and down by 10% (`up` / `down` / `cycle` / `off` / `restore`), so the panel's keyboard slider uses this command to set absolute levels. With no argument it prints the current %; `N%` sets it (0% is allowed and turns the keys off). It finds the device the same way as `omarchy-brightness-keyboard` (the first `*kbd_backlight*` LED, overridable with `OMARCHY_LEDS_DIR`) and shows the same `keyboard` OSD icon.
+
+It writes the LED the same way a SHIFT+brightness press does, so the existing behavior carries over unchanged:
+
+- `omarchy-brightness-keyboard-auto` sees a value it did not write and pauses until the room light changes.
+- In keyboard mode, the sync service sees the source change and moves the Touch Bar with it, resuming if it was paused.
+
 ### `omarchy-brightness-touchbar-sync`
 
 Built like `omarchy-brightness-keyboard-auto` (`--once`, `--available`, and a start check through `ExecCondition`). LED and backlight `brightness` files send no notification (uevent or inotify) when they change, so they are read every second.
@@ -102,11 +111,12 @@ Omarchy's Mac bindings (`default/hypr/bindings/media.lua`) map SHIFT+brightness 
 
 Follows the structure of the built-in Display widget (`plugins/panels/monitor/Panel.qml`).
 
-- Based on `Panel`, with `manageIpc: false` and its own `IpcHandler` (`brightness` / `syncMode` / `state` / `open` / `close` / `toggle`).
+- Based on `Panel`, with `manageIpc: false` and its own `IpcHandler` (`brightness` / `keyboard` / `syncMode` / `state` / `open` / `close` / `toggle`).
 - `BarIconButton`: click opens or closes the panel, the wheel changes ±5%. The OSD is shown with `bar.shell.summon("omarchy.osd", …)`.
-- `KeyboardPanel` + `PanelKeyCatcher`: j/k/h/l/Enter cursor movement. There are three sections: `brightness` (the slider, selectedIndex -1), `sync` (three buttons) and `tinydfr` (the fix button, only shown while tiny-dfr is adaptive).
-- Like Display, the slider sends values with a 180ms debounce and queues a write while one is running. State is not re-read during a write or a debounce, so the slider never jumps back to a stale value.
-- The sync service changes the Touch Bar on its own, so state is re-read every 2 seconds while the panel is open (Display uses 5 seconds).
+- `KeyboardPanel` + `PanelKeyCatcher`: j/k/h/l/Enter cursor movement. There are four sections: `brightness` (the Touch Bar slider, selectedIndex -1), `keyboard` (the keyboard backlight slider, selectedIndex -1), `sync` (three buttons) and `tinydfr` (the fix button, only shown while tiny-dfr is adaptive). Sections whose device is missing are left out.
+- Like Display, each slider sends values with a 180ms debounce and queues a write while one is running. State is not re-read during a write or a debounce, so the slider never jumps back to a stale value.
+- The sync service changes the Touch Bar, and keyboard auto-brightness changes the keyboard, on their own, so state is re-read every 2 seconds while the panel is open (Display uses 5 seconds). In keyboard sync mode, moving the keyboard slider moves the Touch Bar slider at the next re-read.
+- The keyboard slider shows a note about pausing auto-brightness only while `omarchy-brightness-keyboard-auto.service` is active.
 - Commands run with the plugin's own `bin/` (from `Qt.resolvedUrl("bin")`) first on PATH. The bundled version is used even before setup, and even if an older copy sits in `~/.local/bin`.
 - When the sync service unit is missing, the SYNC section shows a setup button instead of the mode buttons. It runs the setup in a terminal through `omarchy-launch-floating-terminal-with-presentation`.
 

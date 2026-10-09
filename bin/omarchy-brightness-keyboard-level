@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# omarchy:summary=Show or set the keyboard backlight brightness as a percentage.
+# omarchy:args=[--no-osd] [N%]
+# omarchy:examples=omarchy-brightness-keyboard-level | omarchy-brightness-keyboard-level 40% | omarchy-brightness-keyboard-level --no-osd 0%
+# Lives in ~/.local/bin: the omarchy dispatcher only routes packaged commands, so call it directly.
+
+# omarchy-brightness-keyboard only steps up and down by 10%; the Touch Bar panel's
+# keyboard slider needs absolute levels. It writes the LED like a manual
+# SHIFT+brightness press, so omarchy-brightness-keyboard-auto pauses the same way,
+# and in keyboard sync mode the Touch Bar follows.
+
+no_osd=0
+
+while (( $# > 0 )); do
+  case "$1" in
+  --no-osd)
+    no_osd=1
+    shift
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
+
+# Same device lookup as omarchy-brightness-keyboard: the first *kbd_backlight* LED.
+device=""
+for candidate in "${OMARCHY_LEDS_DIR:-/sys/class/leds}"/*kbd_backlight*; do
+  if [[ -e $candidate ]]; then
+    device="$(basename "$candidate")"
+    break
+  fi
+done
+
+if [[ -z $device ]]; then
+  echo "No keyboard backlight device found" >&2
+  exit 1
+fi
+
+# Get the brightness percentage of the keyboard backlight
+keyboard_brightness() {
+  brightnessctl -d "$device" -m 2>/dev/null | awk -F, '{ gsub("%", "", $4); print $4; found=1 } END{ exit !found }'
+}
+
+if (( $# == 0 )); then
+  keyboard_brightness
+  exit
+fi
+
+level="$1"
+if [[ ! $level =~ ^[0-9]+%$ ]] || (( ${level%\%} > 100 )); then
+  echo "Usage: omarchy-brightness-keyboard-level [--no-osd] [N%]" >&2
+  exit 1
+fi
+
+exec {lock_fd}>"${XDG_RUNTIME_DIR:-/tmp}/omarchy-brightness-keyboard-level.lock"
+flock -n "$lock_fd" || exit 0
+
+brightnessctl -d "$device" set "$level" >/dev/null
+
+# Same icon as omarchy-brightness-keyboard
+(( no_osd )) || omarchy-osd -i keyboard -p "$(keyboard_brightness)"
