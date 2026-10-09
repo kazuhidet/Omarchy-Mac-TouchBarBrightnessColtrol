@@ -3,7 +3,7 @@
   "id": "kazu.touchbar",
   "name": "Touch Bar",
   "version": "1.0.0",
-  "author": "kazu",
+  "author": "Kazuhide Takahashi",
   "description": "Touch Bar brightness slider and sync mode",
   "kinds": [
     "bar-widget"
