@@ -1,125 +1,126 @@
-# 実装メモ
+# Implementation notes
 
-Touch Bar の輝度制御を Omarchy quattro の輝度まわりの仕様に合わせて実装した際の、設計と判断の記録です。
+English | [日本語](IMPLEMENTATION_ja.md)
 
-## 全体構成
+A record of the design and decisions behind implementing Touch Bar brightness control to match Omarchy quattro's brightness behavior.
+
+## Overview
 
 ```
-                ┌──────────────────────────── Omarchy ────────────────────────────┐
- キー (CTRL+輝度) │ bindings.lua ─┐                                                 │
- バー (kazu.touchbar) Panel.qml ──┼─► omarchy-brightness-touchbar ─► brightnessctl ─┼─► /sys/class/backlight/<touchbar>
-                                 │        │  └─► omarchy-osd (󰌓)                    │
-                                 │        └─► omarchy-hw-touchbar(デバイス検出)       │
- systemd --user                  │                                                 │
-   omarchy-brightness-touchbar-sync ─ 1 秒ごとに確認 ─► kbd_backlight / ALS / DPMS / 蓋 │
-                                 └─ omarchy-brightness-touchbar-sync-mode ─► touchbar-sync.env + systemctl
+Keys (CTRL+brightness) ─ bindings.lua ─┐
+Bar (kazu.touchbar) ──── Panel.qml ────┼─► omarchy-brightness-touchbar ─► brightnessctl ─► /sys/class/backlight/<touchbar>
+                                       │        ├─► omarchy-osd (󰌓)
+                                       │        └─► omarchy-hw-touchbar (device detection)
+systemd --user                         │
+  omarchy-brightness-touchbar-sync ────┘  checks every second: kbd_backlight / ALS / DPMS / lid
+  omarchy-brightness-touchbar-sync-mode ─► touchbar-sync.env + systemctl
 ```
 
-どの入口(キー、スライダー、IPC、同期サービス)も、最終的には同じコマンドと sysfs を通ります。手動調整の検知(後述)が成り立つのはこのためです。
+Every entry point (keys, slider, IPC, sync service) ends up going through the same command and sysfs file. That is what makes manual change detection (below) work.
 
-## コマンド
+## Commands
 
 ### `omarchy-hw-touchbar`
 
-`omarchy-hw-display` と同じ形にしています。デバイス名を 1 行出力し、見つからなければ exit 1 で終わります。`OMARCHY_BACKLIGHT_PATH` で検索先を差し替えられます。
+Shaped like `omarchy-hw-display`: it prints the device name on one line, or exits 1 if none is found. `OMARCHY_BACKLIGHT_PATH` overrides the directory it searches.
 
-1. `appletb_backlight`(T2 Mac。`hid-appletb-bl` が登録するもの)
-2. デバイスツリーの compatible に `apple,summit` を含むバックライト(Apple Silicon。例:`228600000.dsi.0`)
+1. `appletb_backlight` (T2 Macs, registered by `hid-appletb-bl`)
+2. A backlight whose device tree compatible contains `apple,summit` (Apple Silicon, e.g. `228600000.dsi.0`)
 
-名前の順番に頼らず compatible で判定しているので、画面本体のバックライト(`apple-panel-bl`)を誤って選ぶことはありません。逆に、`omarchy-hw-display` は `appletb_backlight` を除外し `apple-panel-bl` を優先するので、2 つのスクリプトの検出結果が重なることはありません。
+Matching on compatible rather than on name order means the display backlight (`apple-panel-bl`) is never picked by mistake. In the other direction, `omarchy-hw-display` excludes `appletb_backlight` and prefers `apple-panel-bl`, so the two scripts never pick the same device.
 
 ### `omarchy-brightness-touchbar`
 
-`omarchy-brightness-display` と同じ仕様にしています。
+Follows the same spec as `omarchy-brightness-display`.
 
-| 項目 | 内容 |
+| Item | Details |
 |---|---|
-| 引数 | `[--no-osd] [+N%\|N%-\|N%\|off\|on]`。引数なしなら現在の % を表示 |
-| 排他制御 | `flock -n`。キーを押し続けたときに起動が重なったら、後から来たものを捨てる |
-| `+5%` / `5%-` の扱い | 5% 以下では 1% 刻みにする。それ以外は、目標の % を計算して絶対値で設定する。Touch Bar のバックライトは 0〜255 と段階が粗いので、相対指定で丸め誤差がたまるのを避けるため |
-| 下限 | 1%。0 は `off` でだけ設定する |
-| `off` / `on` | 画面用の display 版は DPMS を使うが、Touch Bar 版は `brightnessctl --save` で 0 にし、`--restore` で戻す |
-| OSD | `omarchy-osd -i <glyph> -p <%>`。`OsdModel.js` の `iconFor()` は登録されていない名前をそのまま文字として表示するので、Nerd Font の文字(󰌓)を直接渡している。キーボードバックライトの OSD(󰌌)とは別の文字にしている |
+| Arguments | `[--no-osd] [+N%\|N%-\|N%\|off\|on]`. With no argument, prints the current % |
+| Locking | `flock -n`. When a held key starts overlapping runs, the later ones are dropped |
+| `+5%` / `5%-` | 1% steps at 5% and below. Otherwise the target % is computed and set as an absolute value: the Touch Bar backlight only has 0-255 steps, and relative changes would accumulate rounding errors |
+| Minimum | 1%. 0 is only set by `off` |
+| `off` / `on` | The display version uses DPMS; the Touch Bar version sets 0 with `brightnessctl --save` and comes back with `--restore` |
+| OSD | `omarchy-osd -i <glyph> -p <%>`. `iconFor()` in `OsdModel.js` shows an unknown name as literal text, so a Nerd Font glyph (󰌓) is passed directly. It is a different glyph from the keyboard backlight OSD (󰌌) |
 
 ### `omarchy-brightness-touchbar-sync`
 
-`omarchy-brightness-keyboard-auto` と同じ構造です(`--once`、`--available`、`ExecCondition` での起動条件チェック)。LED や backlight の `brightness` は値が変わっても通知(uevent、inotify)が来ないので、1 秒ごとに読みに行きます。
+Built like `omarchy-brightness-keyboard-auto` (`--once`, `--available`, and a start check through `ExecCondition`). LED and backlight `brightness` files send no notification (uevent or inotify) when they change, so they are read every second.
 
-1 回の確認(`tick`)の流れは次のとおりです。
+Each check (`tick`) works like this:
 
-1. **消灯の判定**:`hyprctl monitors -j` の内蔵パネル(eDP/LVDS/DSI)がすべて `dpmsStatus=false` か、`omarchy-hw-laptop-closed` が真なら、現在値を退避して 0 にする。
-   - ロック画面の消灯処理(`lock/Service.qml` の `omarchy-brightness-display off`)も、蓋を閉じたときや外部モニターだけで使うときも、これで拾える。
-2. **復帰**:消灯状態から戻ったら、退避した値に戻す。`omarchy-system-wake` の `display on` に対応する。
-3. **手動調整の検知**:前回自分が書き込んだ値(`last_set`)と現在値が違えば、誰かが手で変えたとみなし、同期を一時停止する。その時点の同期元の値(`pause_value`)を記録する。
-   - キーボードの自動調整(`keyboard-auto`)の「手動で書き込まれたら一時停止する」仕組みと同じ考え方。
-4. **再開**:keyboard モードでは `pause_value` から値が変わったら再開する。ambient モードでは `keyboard-auto` と同じしきい値(±20 lux または ±40% の大きい方)を超えたら再開する。手動で 0 にしていた場合は再開しない。
-5. **目標値の適用**:keyboard モードは `min + kbd% × (100 − min)`。ambient モードは 8〜400 lux を下限〜100% に直線で対応させ、4% 未満の差は無視して揺れを抑える。
+1. **Blackout**: if every internal panel (eDP/LVDS/DSI) in `hyprctl monitors -j` has `dpmsStatus=false`, or `omarchy-hw-laptop-closed` is true, save the current value and set 0.
+   - This covers the lock screen blanking (`omarchy-brightness-display off` in `lock/Service.qml`), a closed lid, and running on external monitors only.
+2. **Wake**: when the blackout ends, restore the saved value. This pairs with `display on` in `omarchy-system-wake`.
+3. **Manual change detection**: if the current value differs from what the service last wrote (`last_set`), someone changed it by hand, so syncing pauses. The source value at that moment is saved as `pause_value`.
+   - The same idea as keyboard auto-brightness (`keyboard-auto`) pausing when it sees a manual write.
+4. **Resume**: in keyboard mode, syncing resumes when the source moves away from `pause_value`. In ambient mode it resumes past the same threshold as `keyboard-auto` (the larger of ±20 lux or ±40%). If the Touch Bar was turned off by hand, it does not resume.
+5. **Apply the target**: keyboard mode uses `min + kbd% × (100 − min)`. Ambient mode maps 8-400 lux linearly onto floor-100%, ignoring differences under 4% to avoid flicker.
 
-同期サービスはキーボードの LED に一切書き込みません。このため `keyboard-auto` の一時停止の判定や、`omarchy-brightness-keyboard off/restore` とぶつかりません。
+The sync service never writes the keyboard LED, so it never interferes with `keyboard-auto`'s pause detection or with `omarchy-brightness-keyboard off/restore`.
 
 ### `omarchy-brightness-touchbar-sync-mode`
 
-`~/.config/omarchy/touchbar-sync.env` を唯一の設定元にしています。`keyboard` / `ambient` を指定すると、その行だけ書き換えてサービスを `enable` + `restart` します。`off` を指定すると `disable --now` します。引数なしならサービスの状態と設定ファイルから現在のモードを返します。
+`~/.config/omarchy/touchbar-sync.env` is the single source of settings. `keyboard` / `ambient` rewrites only that line and runs `enable` + `restart` on the service. `off` runs `disable --now`. With no argument, it prints the current mode from the service state and the settings file.
 
 ### `omarchy-brightness-touchbar-setup`
 
-`omarchy plugin add` は、clone・検証・有効化しかしません(フックの実行や sudo は使わない)。それを補うのがこのコマンドです。
+`omarchy plugin add` only clones, validates and enables (no hooks, no sudo). This command does the rest.
 
-- **コマンド**:`~/.local/bin` にシンボリックリンクを張ります。`omarchy plugin update`(fast-forward pull)だけで新しい版になります。ただし `omarchy plugin validate` はプラグインフォルダの**中に**シンボリックリンクがあると拒否するので、リンクは必ず外向き(`~/.local/bin` → プラグイン)にしています。
-- **systemd ユニット**:リンクではなくコピーします。検索パスの外にあるユニットへのリンクは、systemd では「linked unit」という別の扱いになるためです。quattro が `~/.config/systemd/user` を使わない方針にしているのはパッケージが配るユニットの話なので、ユーザーが自分で作ったユニットを置くのは問題ありません。
-- **キー割り当て**:`-- >>> kazu.touchbar bindings >>>` から `<<<` までのマーカーで囲んで追記します。`uninstall` ではこの範囲だけを削除します。手で書いた割り当てがすでにある場合は触りません。
-- **tiny-dfr**(`tiny-dfr [--check|--revert]`):root 権限が必要な唯一の手順なので、`install` には含めず、別のサブコマンドにしています。詳しくは次の節を参照してください。
+- **Commands**: symlinked into `~/.local/bin`, so `omarchy plugin update` (a fast-forward pull) is enough to update them. `omarchy plugin validate` rejects symlinks **inside** the plugin folder, so the links always point outward (`~/.local/bin` → plugin).
+- **systemd unit**: copied, not linked. systemd treats a link to a unit outside its search path as a "linked unit", which behaves differently. Quattro avoids `~/.config/systemd/user` for units shipped by packages; a unit the user creates there is fine.
+- **Key bindings**: appended between `-- >>> kazu.touchbar bindings >>>` and `<<<` markers. `uninstall` removes only that range. Bindings already written by hand are left alone.
+- **tiny-dfr** (`tiny-dfr [--check|--revert]`): the only step that needs root, so it is a separate subcommand rather than part of `install`. See the next section.
 
-## tiny-dfr との競合
+## Conflict with tiny-dfr
 
-tiny-dfr は `AdaptiveBrightness = true`(既定)のとき、画面の明るさが変わると Touch Bar の明るさを書き換えます。実測では、`apple-panel-bl` を 5 → 15 にすると Touch Bar が 79 → 22 になり、5 に戻すと 13 になりました。同期サービスはこれを手動調整と区別できないので、tiny-dfr の自動調整を止め、Touch Bar の明るさはこのツールだけが書き込む形にしています。
+With `AdaptiveBrightness = true` (the default), tiny-dfr rewrites the Touch Bar brightness whenever the display brightness changes. In testing, moving `apple-panel-bl` from 5 to 15 took the Touch Bar from 79 to 22, and going back to 5 left it at 13. The sync service cannot tell this apart from a manual change, so tiny-dfr adaptive brightness is turned off and this tool becomes the only writer of the Touch Bar brightness.
 
-配布するうえでの判断は次のとおりです。
+How the change is distributed:
 
-| 方法 | 採否 | 理由 |
+| Approach | Used | Reason |
 |---|---|---|
-| `setup tiny-dfr` で本人が選んだときに sudo で書く | 採用 | root が必要な変更を、内容を見せたうえで 1 回だけ行える |
-| `omarchy plugin add` で自動的に書く | 不採用 | Omarchy はプラグインのスクリプトを実行しない方針 |
-| パッケージで `/etc/tiny-dfr/config.toml` を配る | 不採用 | 利用者が自分で書いた設定ファイルとぶつかる |
-| polkit で常に許可する | 不採用 | 一度きりの設定変更のために常時の権限を渡すことになる |
+| `setup tiny-dfr` writes it with sudo when the user chooses to | Yes | A change that needs root is made once, with the user seeing what it does |
+| Write it automatically on `omarchy plugin add` | No | Omarchy's policy is to never run plugin scripts |
+| Ship `/etc/tiny-dfr/config.toml` in a package | No | It would clash with a config file the user wrote |
+| Always allow it through polkit | No | Hands out standing privileges for a one-time settings change |
 
-- **書く内容**:`/etc/tiny-dfr/config.toml` は `/usr/share/tiny-dfr/config.toml` に項目ごとに重ねて読まれるので、`AdaptiveBrightness = false` の 1 行だけで済みます。新しく作るファイルの先頭には `# Created by kazu.touchbar` の行を入れ、`--revert` ではファイルごと削除します。
-- **既存のファイルがある場合**:先頭に `# >>> kazu.touchbar >>>` 〜 `<<<` のブロックを足し、元の `AdaptiveBrightness` 行の先頭に `#kazu.touchbar# ` を付けてコメントにします。TOML ではキーの重複がエラーになるためです。ブロックを先頭に置くのは、`[table]` より前のトップレベルのキーとして読ませるためです。`--revert` ではブロックを消し、コメントを外します。
-- **反映**:書き換えたら `systemctl try-restart tiny-dfr` を実行します。tiny-dfr は起動時に Touch Bar を `ActiveBrightness` にするので、続けて同期サービスも再起動し、同期の値に戻します。
-- **パネル**:状態を読むときに `tiny-dfr --check`(`adaptive` / `static` / `none`)も実行します。`adaptive` なら TINY-DFR 欄とボタンを出します。ボタンを押すと、sudo のパスワードを入力できるようにターミナルで実行します。
+- **What is written**: `/etc/tiny-dfr/config.toml` is merged key by key over `/usr/share/tiny-dfr/config.toml`, so the single line `AdaptiveBrightness = false` is enough. A newly created file starts with a `# Created by kazu.touchbar` line, and `--revert` deletes the whole file.
+- **When the file already exists**: a `# >>> kazu.touchbar >>>` … `<<<` block is added at the top, and the original `AdaptiveBrightness` line is commented out with a `#kazu.touchbar# ` prefix, because TOML rejects duplicate keys. The block goes at the top so it is read as a top-level key, before any `[table]`. `--revert` removes the block and uncomments the line.
+- **Applying it**: after writing, `systemctl try-restart tiny-dfr` runs. tiny-dfr sets the Touch Bar to `ActiveBrightness` when it starts, so the sync service is restarted next to put back the synced value.
+- **Panel**: reading state also runs `tiny-dfr --check` (`adaptive` / `static` / `none`). When it is `adaptive`, the TINY-DFR section and button appear. The button runs the command in a terminal so the sudo password can be entered.
 
-## キー割り当ての方針
+## Key binding policy
 
-Omarchy の Mac 向け版(`default/hypr/bindings/media.lua`)は、SHIFT+輝度キーをキーボードバックライトに割り当てています。Touch Bar はこれを上書きせず、修飾キーの並びを画面用に合わせました。
+Omarchy's Mac bindings (`default/hypr/bindings/media.lua`) map SHIFT+brightness to the keyboard backlight. The Touch Bar keys leave that alone and copy the display's modifier pattern instead.
 
-| 修飾キー | 画面 | Touch Bar |
+| Modifier | Display | Touch Bar |
 |---|---|---|
-| なし | ±5% | CTRL ±5% |
+| None | ±5% | CTRL ±5% |
 | ALT | ±1% | CTRL+ALT ±1% |
 
-## シェルプラグイン(`Panel.qml`)
+## Shell plugin (`Panel.qml`)
 
-組み込みの Display ウィジェット(`plugins/panels/monitor/Panel.qml`)の構造をそのまま使っています。
+Follows the structure of the built-in Display widget (`plugins/panels/monitor/Panel.qml`).
 
-- `Panel` を元にし、`manageIpc: false` にして独自の `IpcHandler`(`brightness` / `syncMode` / `state` / `open` / `close` / `toggle`)を持たせている。
-- `BarIconButton`:クリックでパネルを開閉し、ホイールで ±5%。OSD は `bar.shell.summon("omarchy.osd", …)` で出す。
-- `KeyboardPanel` + `PanelKeyCatcher`:j/k/h/l/Enter のカーソル操作。sections は `brightness`(スライダー、selectedIndex は -1)と `sync`(ボタン 3 つ)の 2 つ。
-- スライダーは Display と同じく、180ms のデバウンスと実行中の書き込みのキューイングで値を送る。書き込み中とデバウンス中は状態の読み直しをせず、スライダーが一瞬古い値に戻るのを防いでいる。
-- 同期サービスが Touch Bar の値を変えるので、パネルを開いている間は 2 秒ごとに状態を読み直す(Display は 5 秒ごと)。
-- コマンドは `Qt.resolvedUrl("bin")` で得たプラグイン内の `bin/` を PATH の先頭に置いて実行する。セットアップ前でも、`~/.local/bin` にある古い版があっても、プラグインに同梱した版が使われる。
-- 同期サービスのユニットがなければ、SYNC 欄にモード切替ボタンの代わりにセットアップボタンを出す。押すと `omarchy-launch-floating-terminal-with-presentation` で、ターミナル上でセットアップを実行する。
+- Based on `Panel`, with `manageIpc: false` and its own `IpcHandler` (`brightness` / `syncMode` / `state` / `open` / `close` / `toggle`).
+- `BarIconButton`: click opens or closes the panel, the wheel changes ±5%. The OSD is shown with `bar.shell.summon("omarchy.osd", …)`.
+- `KeyboardPanel` + `PanelKeyCatcher`: j/k/h/l/Enter cursor movement. There are three sections: `brightness` (the slider, selectedIndex -1), `sync` (three buttons) and `tinydfr` (the fix button, only shown while tiny-dfr is adaptive).
+- Like Display, the slider sends values with a 180ms debounce and queues a write while one is running. State is not re-read during a write or a debounce, so the slider never jumps back to a stale value.
+- The sync service changes the Touch Bar on its own, so state is re-read every 2 seconds while the panel is open (Display uses 5 seconds).
+- Commands run with the plugin's own `bin/` (from `Qt.resolvedUrl("bin")`) first on PATH. The bundled version is used even before setup, and even if an older copy sits in `~/.local/bin`.
+- When the sync service unit is missing, the SYNC section shows a setup button instead of the mode buttons. It runs the setup in a terminal through `omarchy-launch-floating-terminal-with-presentation`.
 
-### ホットリロードについて
+### Hot reload
 
-`~/.config/omarchy/plugins/` 以下のファイルを保存すると「Local plugin changed, reloading」とログに出て再読み込みされます。ただし、QML のコンポーネントキャッシュのせいで変更が描画に反映されないことがありました。その場合は `omarchy restart shell` を実行してください。
+Saving a file under `~/.config/omarchy/plugins/` logs "Local plugin changed, reloading" and reloads the plugin. However, the QML component cache sometimes kept the old rendering. In that case, run `omarchy restart shell`.
 
-## 確認方法
+## Testing
 
-- `hyprctl` を偽物に差し替える:PATH の先頭に置いたスクリプトで、DPMS オフの JSON を返す。こうすると実際の画面を消さずに、消灯と復帰の流れを確認できる。
-- `OMARCHY_BACKLIGHT_PATH` / `OMARCHY_LEDS_DIR` / `OMARCHY_IIO_DEVICES_DIR`:sysfs を偽のディレクトリに差し替えて、デバイス検出を確認できる。
-- `OMARCHY_TINY_DFR_DEFAULT` / `OMARCHY_TINY_DFR_CONF`:tiny-dfr の設定ファイルの場所を差し替えられる。`sudo` と `systemctl` を、引数をそのまま実行するだけの偽物に PATH で差し替えると、root 権限なしで `tiny-dfr` / `--revert` の動きを確認できる。
-- `omarchy-shell kazu.touchbar state`:パネルが持っている状態を JSON で確認できる。
+- Replace `hyprctl` with a fake: a script first on PATH that returns JSON with DPMS off. This tests blackout and wake without actually turning the display off.
+- `OMARCHY_BACKLIGHT_PATH` / `OMARCHY_LEDS_DIR` / `OMARCHY_IIO_DEVICES_DIR`: point sysfs at a fake directory to test device detection.
+- `OMARCHY_TINY_DFR_DEFAULT` / `OMARCHY_TINY_DFR_CONF`: move the tiny-dfr config files. With `sudo` and `systemctl` replaced on PATH by fakes that just run their arguments, `tiny-dfr` / `--revert` can be tested without root.
+- `omarchy-shell kazu.touchbar state`: prints the panel's state as JSON.
 
-## 今後の課題
+## Future work
 
-- tiny-dfr の `backlight_high.svg`(Material Symbols)を、バーとパネルのアイコンに使う。`BarIconButton.iconComponent` に画像を差し込めば実現できる。OSD は文字しか表示できないので、OSD プラグインを複製しないと使えない。
+- Use tiny-dfr's `backlight_high.svg` (Material Symbols) as the bar and panel icon, by putting an image into `BarIconButton.iconComponent`. The OSD only shows text, so using it there would mean copying the OSD plugin.

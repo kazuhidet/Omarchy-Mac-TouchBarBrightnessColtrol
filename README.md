@@ -1,200 +1,201 @@
 # Touch Bar Brightness for Omarchy
 
-Apple Silicon / T2 MacBook Pro の Touch Bar の輝度を、Omarchy quattro の輝度コントロールと同じ作法で扱うためのツール一式です。Omarchy シェルのプラグイン(`kazu.touchbar`)として配布でき、Omarchy のメニューから Git の URL を指定してインストールできます。
+English | [日本語](README_ja.md)
 
-- **ステータスバーのウィジェット**:Display ウィジェットと同じ見た目で、スライダーと同期モードの切り替えを提供
-- **キー操作**:CTRL+輝度キーで ±5%、CTRL+ALT+輝度キーで ±1%(画面用の 輝度キー / ALT+輝度キー と同じ並び)
-- **自動同期**:キーボードバックライト(または照度センサー)に連動。ロック画面での消灯や蓋を閉じたときは Touch Bar も消灯
-- **OSD**:輝度を変えると Omarchy の OSD に表示(アイコン 󰌓)
+Touch Bar brightness control for Apple Silicon and T2 MacBook Pros, built to work the same way as Omarchy quattro's own brightness controls. It ships as an Omarchy shell plugin (`kazu.touchbar`) that can be installed from the Omarchy menu by its Git URL.
 
-## 動作環境
+- **Status bar widget**: looks like the built-in Display widget, with a brightness slider and a sync mode switch
+- **Keys**: CTRL+brightness keys for ±5%, CTRL+ALT+brightness keys for ±1% (the same pattern as brightness / ALT+brightness for the display)
+- **Automatic sync**: follows the keyboard backlight (or the ambient light sensor), and goes dark with the display on the lock screen or when the lid is closed
+- **OSD**: brightness changes show on the Omarchy OSD (icon 󰌓)
 
-| 項目 | 内容 |
+## Requirements
+
+| Item | Details |
 |---|---|
-| OS | Omarchy quattro(Hyprland の Lua 設定、Quickshell ベースの `omarchy-shell`) |
-| ハードウェア | Touch Bar 付き MacBook Pro<br>Apple Silicon(Asahi Linux、`apple,summit` の DSI バックライト)または T2 Mac(`appletb_backlight`) |
-| 必要なコマンド | `brightnessctl`、`jq`、`hyprctl`(いずれも Omarchy に標準で入っています) |
-| 照度センサー連動(任意) | IIO の照度センサー(Apple Silicon では `aop-sensors-als`) |
+| OS | Omarchy quattro (Hyprland with the Lua config, Quickshell-based `omarchy-shell`) |
+| Hardware | MacBook Pro with a Touch Bar<br>Apple Silicon (Asahi Linux, `apple,summit` DSI backlight) or T2 Mac (`appletb_backlight`) |
+| Commands | `brightnessctl`, `jq`, `hyprctl` (all included in Omarchy) |
+| Ambient sync (optional) | An IIO light sensor (`aop-sensors-als` on Apple Silicon) |
 
-## インストール
+## Installation
 
-### 1. プラグインを追加する
+### 1. Add the plugin
 
-**メニューから:** Omarchy メニュー → **Setup → Plugins → Add Plugin** を開き、次の URL を入力します。
+**From the menu:** open the Omarchy menu → **Setup → Plugins → Add Plugin** and enter this URL:
 
 ```
 https://github.com/kazuhidet/Omarchy-Mac-TouchBarBrightnessColtrol
 ```
 
-「Enable now?」で Yes を選び、置き場所に `right` を選びます。
+Answer Yes to "Enable now?" and choose `right` as the position.
 
-**コマンドから:**
+**From the command line:**
 
 ```bash
 omarchy plugin add https://github.com/kazuhidet/Omarchy-Mac-TouchBarBrightnessColtrol --enable
-omarchy bar move kazu.touchbar --after omarchy.monitor   # Display の右隣に置く場合
+omarchy bar move kazu.touchbar --after omarchy.monitor   # place it right after Display
 ```
 
-プラグインは `~/.config/omarchy/plugins/kazu.touchbar/` に clone されます。この時点でステータスバーにアイコンが出て、スライダーでの調整ができます。
+The plugin is cloned to `~/.config/omarchy/plugins/kazu.touchbar/`. The icon appears in the status bar right away and the slider already works.
 
-### 2. セットアップを実行する
+### 2. Run the setup
 
-`omarchy plugin add` はセキュリティ上の理由でプラグイン内のスクリプトを実行しません。同期サービス・コマンド・キー割り当ては、次のどちらかで別途セットアップします。
+For security, `omarchy plugin add` never runs scripts from a plugin. Set up the sync service, commands and key bindings separately, in one of two ways:
 
-- ステータスバーの Touch Bar パネルを開き、**Set up sync service and keys** を押す(ターミナルが開いて実行されます)
-- またはターミナルで次を実行する
+- Open the Touch Bar panel in the status bar and press **Set up sync service and keys** (it runs in a terminal), or
+- Run this in a terminal:
 
 ```bash
 ~/.config/omarchy/plugins/kazu.touchbar/bin/omarchy-brightness-touchbar-setup install --bindings
 ```
 
-セットアップの内容は次のとおりです。
+The setup installs:
 
-| 内容 | 場所 |
+| What | Where |
 |---|---|
-| コマンドのシンボリックリンク | `~/.local/bin/omarchy-*touchbar*` → プラグインの `bin/` |
-| 同期サービス(有効化して起動) | `~/.config/systemd/user/omarchy-brightness-touchbar-sync.service` |
-| キー割り当て(`--bindings` 指定時) | `~/.config/hypr/bindings.lua` の末尾にマーカー付きで追記 |
+| Command symlinks | `~/.local/bin/omarchy-*touchbar*` → the plugin's `bin/` |
+| Sync service (enabled and started) | `~/.config/systemd/user/omarchy-brightness-touchbar-sync.service` |
+| Key bindings (with `--bindings`) | Appended to the end of `~/.config/hypr/bindings.lua`, between markers |
 
-`--bindings` を付けないと、キー割り当ては追加しません。`bindings.lua` に `omarchy-brightness-touchbar` の割り当てがすでにある場合も、追記しません。
+Without `--bindings`, no key bindings are added. They are also skipped if `bindings.lua` already binds `omarchy-brightness-touchbar`.
 
-状態の確認は `omarchy-brightness-touchbar-setup status` で行えます。
+Check the result with `omarchy-brightness-touchbar-setup status`.
 
-### 3. tiny-dfr の自動調整を止める(推奨)
+### 3. Turn off tiny-dfr adaptive brightness (recommended)
 
-Touch Bar の表示を担当する tiny-dfr は、既定では画面の明るさに合わせて Touch Bar の明るさを書き換えます(詳しくは「[tiny-dfr との競合](#tiny-dfr-との競合)」)。このままだと、画面の明るさを変えるたびにスライダーや同期の設定が上書きされます。
+tiny-dfr, the daemon that draws the Touch Bar, by default sets the Touch Bar brightness to follow the display brightness (see [Conflict with tiny-dfr](#conflict-with-tiny-dfr)). Left as is, every display brightness change overrides the slider and the sync service.
 
-パネルに **TINY-DFR** 欄が出ている場合は **Turn off tiny-dfr adaptive brightness** を押すか、ターミナルで次を実行します。root 権限が必要なので `sudo` のパスワードを聞かれます。
+If the panel shows a **TINY-DFR** section, press **Turn off tiny-dfr adaptive brightness**, or run the following in a terminal. It needs root, so `sudo` asks for your password.
 
 ```bash
 ~/.config/omarchy/plugins/kazu.touchbar/bin/omarchy-brightness-touchbar-setup tiny-dfr
 ```
 
-このコマンドが行うことは次のとおりです。
+The command does the following:
 
-- `/etc/tiny-dfr/config.toml` に `AdaptiveBrightness = false` を書く
-  - ファイルがなければ、この 1 行だけのファイルを作ります。tiny-dfr は `/usr/share/tiny-dfr/config.toml` と項目ごとに組み合わせて読むので、ボタンの並びなど他の設定は変わりません。
-  - すでにファイルがあれば、`config.toml.bak.<時刻>` にバックアップしてから、先頭にマーカー付きでこの行を足します。元の `AdaptiveBrightness` の行はコメントにします。
-- tiny-dfr と同期サービスを再起動する
+- Writes `AdaptiveBrightness = false` to `/etc/tiny-dfr/config.toml`
+  - If the file does not exist, it creates one with just that line. tiny-dfr merges it key by key over `/usr/share/tiny-dfr/config.toml`, so the button layout and other settings stay unchanged.
+  - If the file exists, it is backed up to `config.toml.bak.<time>`, the line is added at the top between markers, and the original `AdaptiveBrightness` line is commented out.
+- Restarts tiny-dfr and the sync service
 
-元に戻すには `omarchy-brightness-touchbar-setup tiny-dfr --revert` を実行します(`uninstall` でも戻ります)。手で設定する場合は、`/etc/tiny-dfr/config.toml` に `AdaptiveBrightness = false` の 1 行を書いて `sudo systemctl restart tiny-dfr` を実行してください。
+To undo it, run `omarchy-brightness-touchbar-setup tiny-dfr --revert` (`uninstall` also undoes it). To do it by hand, put the single line `AdaptiveBrightness = false` in `/etc/tiny-dfr/config.toml` and run `sudo systemctl restart tiny-dfr`.
 
-## 使い方
+## Usage
 
-### ステータスバー
+### Status bar
 
-Display ウィジェットの隣に 󰌓 が表示されます。
+󰌓 appears next to the Display widget.
 
-- **クリック**:パネルを開閉
-- **ホイール**:±5%(OSD を表示)
-- **パネル**
-  - BRIGHTNESS スライダー:Touch Bar の輝度
-  - SYNC:Keyboard / Ambient / Manual の切り替え
-  - キーボード操作:j/k で項目移動、h/l で値・選択の変更、Enter で決定、Tab で隣のパネルへ
+- **Click**: open or close the panel
+- **Wheel**: ±5% (shows the OSD)
+- **Panel**
+  - BRIGHTNESS slider: Touch Bar brightness
+  - SYNC: switch between Keyboard / Ambient / Manual
+  - Keyboard: j/k to move between sections, h/l to change the value or selection, Enter to confirm, Tab to the next panel
 
-### キー
+### Keys
 
-| キー | 動作 |
+| Keys | Action |
 |---|---|
-| 輝度キー / ALT+輝度キー | 画面の輝度 ±5% / ±1%(Omarchy 標準) |
-| SHIFT+輝度キー | キーボードバックライト(Omarchy 標準)。Keyboard モードでは Touch Bar も連動 |
-| CTRL+輝度キー | Touch Bar ±5% |
-| CTRL+ALT+輝度キー | Touch Bar ±1% |
+| Brightness / ALT+brightness | Display brightness ±5% / ±1% (Omarchy default) |
+| SHIFT+brightness | Keyboard backlight (Omarchy default). In Keyboard mode the Touch Bar follows it |
+| CTRL+brightness | Touch Bar ±5% |
+| CTRL+ALT+brightness | Touch Bar ±1% |
 
-### 同期モード
+### Sync modes
 
-| モード | 動作 |
+| Mode | Behavior |
 |---|---|
-| Keyboard(既定) | `Touch Bar % = 下限 + キーボード% × (100 − 下限)`。キーボードの自動調整が明るい部屋で 0% にしても、Touch Bar は下限(既定 30%)を保つ |
-| Ambient | 照度センサーに連動。8 lux 以下で下限、400 lux 以上で 100%、その間は直線的に変化 |
-| Manual | 同期サービスを停止。キーとスライダーだけで調整 |
+| Keyboard (default) | `Touch Bar % = floor + keyboard% × (100 − floor)`. Even when keyboard auto-brightness turns the keys off in a bright room, the Touch Bar stays at the floor (30% by default) |
+| Ambient | Follows the light sensor: the floor at 8 lux or less, 100% at 400 lux or more, linear in between |
+| Manual | The sync service is stopped. Only the keys and the slider change the brightness |
 
-どのモードでも、次の動きは共通です(Manual では同期サービス自体が止まります)。
+In both sync modes:
 
-- **消灯の連動**:内蔵画面が消えたとき(ロック画面の消灯、DPMS オフ)や蓋を閉じたときは Touch Bar を 0 にし、復帰したら元の明るさに戻します。
-- **手動調整の優先**:キーやスライダーで調整すると、同期を一時停止します。キーボードの明るさ(Ambient では照度)が変わると同期を再開します。
-- **手動の off**:`omarchy-brightness-touchbar off` で消した場合は、手動で `on` にするまで消えたままです。
+- **Blackout**: when the internal display goes dark (lock screen idle, DPMS off) or the lid is closed, the Touch Bar goes to 0, and it comes back to its previous level afterwards.
+- **Manual changes win**: adjusting with the keys or the slider pauses syncing. It resumes when the keyboard backlight (or, in Ambient, the room light) changes.
+- **Manual off**: after `omarchy-brightness-touchbar off`, the Touch Bar stays off until you turn it back `on`.
 
-### コマンド
+### Commands
 
 ```bash
-omarchy-brightness-touchbar               # 現在の輝度(%)を表示
+omarchy-brightness-touchbar               # print the current brightness (%)
 omarchy-brightness-touchbar +5% | 5%- | 50%
 omarchy-brightness-touchbar --no-osd 40%
 omarchy-brightness-touchbar off | on
 
-omarchy-brightness-touchbar-sync-mode     # keyboard / ambient / off を表示
+omarchy-brightness-touchbar-sync-mode     # print keyboard / ambient / off
 omarchy-brightness-touchbar-sync-mode ambient
 
-omarchy-hw-touchbar                       # 検出した Touch Bar のバックライトデバイス名
+omarchy-hw-touchbar                       # name of the detected Touch Bar backlight device
 
-omarchy-shell kazu.touchbar state         # シェル IPC(brightness <N> / syncMode <mode> / open / close / toggle)
+omarchy-shell kazu.touchbar state         # shell IPC (brightness <N> / syncMode <mode> / open / close / toggle)
 ```
 
-`omarchy brightness touchbar` の形では呼べません。`omarchy` コマンドは、Omarchy のパッケージに含まれるコマンドしか呼び出せないためです。
+`omarchy brightness touchbar` does not work: the `omarchy` dispatcher only runs commands shipped in the Omarchy package.
 
-### 設定
+### Settings
 
-`~/.config/omarchy/touchbar-sync.env`(パネルや `sync-mode` コマンドからも書き換わります)
+`~/.config/omarchy/touchbar-sync.env` (also written by the panel and the `sync-mode` command):
 
 ```sh
 OMARCHY_TOUCHBAR_SYNC_MODE=keyboard   # keyboard / ambient
-OMARCHY_TOUCHBAR_SYNC_MIN=30          # 連動時の下限 %(0〜100)
+OMARCHY_TOUCHBAR_SYNC_MIN=30          # floor in % while syncing (0-100)
 ```
 
-手で編集した後は `systemctl --user restart omarchy-brightness-touchbar-sync` を実行してください。
+After editing it by hand, run `systemctl --user restart omarchy-brightness-touchbar-sync`.
 
-OSD のアイコンは環境変数 `OMARCHY_TOUCHBAR_OSD_ICON`(Nerd Font の文字)で変更できます。
+The OSD icon can be changed with the `OMARCHY_TOUCHBAR_OSD_ICON` environment variable (a Nerd Font glyph).
 
-## 更新
+## Updating
 
 ```bash
 omarchy plugin update kazu.touchbar
 ```
 
-コマンドはシンボリックリンクなので、自動で新しい版になります。サービスファイルが変わった場合は `omarchy-brightness-touchbar-setup install` を再実行してください。QML の変更が反映されない場合は `omarchy restart shell` を実行します。
+The commands are symlinks, so they update automatically. If the service file changed, run `omarchy-brightness-touchbar-setup install` again. If QML changes do not show up, run `omarchy restart shell`.
 
-## アンインストール
+## Uninstalling
 
 ```bash
-omarchy-brightness-touchbar-setup uninstall   # サービス・リンク・追記したキー割り当て・tiny-dfr の変更を元に戻す
+omarchy-brightness-touchbar-setup uninstall   # removes the service, links and added key bindings, and reverts the tiny-dfr change
 omarchy plugin remove kazu.touchbar
 ```
 
-`touchbar-sync.env` と、編集前のバックアップ(`*.bak.<時刻>`)は残ります。
+`touchbar-sync.env` and the backups made before editing (`*.bak.<time>`) are kept.
 
-## トラブルシューティング
+## Troubleshooting
 
-| 症状 | 確認すること |
+| Symptom | What to check |
 |---|---|
-| パネルに「NO TOUCH BAR FOUND」と出る | `omarchy-hw-touchbar` が何も出力しない。`ls /sys/class/backlight` で `appletb_backlight` か `*.dsi.*` があるか確認 |
-| 同期しない | `omarchy-brightness-touchbar-setup status`、`journalctl --user -u omarchy-brightness-touchbar-sync` |
-| Ambient を選ぶと Manual に戻る | 照度センサーが見つからず、サービスの起動条件チェックで止まっている。`ls /sys/bus/iio/devices/*/in_illuminance*` で確認 |
-| アイコンや QML の変更が反映されない | `omarchy restart shell` |
-| 画面の明るさを変えると Touch Bar の明るさも変わる | tiny-dfr の自動調整が有効。`omarchy-brightness-touchbar-setup tiny-dfr --check` が `adaptive` なら、[手順 3](#3-tiny-dfr-の自動調整を止める推奨) を実行 |
+| The panel says "NO TOUCH BAR FOUND" | `omarchy-hw-touchbar` prints nothing. Check that `ls /sys/class/backlight` lists `appletb_backlight` or `*.dsi.*` |
+| Sync does nothing | `omarchy-brightness-touchbar-setup status`, `journalctl --user -u omarchy-brightness-touchbar-sync` |
+| Choosing Ambient falls back to Manual | No light sensor was found, so the service's start condition stopped it. Check `ls /sys/bus/iio/devices/*/in_illuminance*` |
+| Icon or QML changes do not show up | `omarchy restart shell` |
+| Changing the display brightness also changes the Touch Bar | tiny-dfr adaptive brightness is on. If `omarchy-brightness-touchbar-setup tiny-dfr --check` prints `adaptive`, follow [step 3](#3-turn-off-tiny-dfr-adaptive-brightness-recommended) |
 
-## tiny-dfr との競合
+## Conflict with tiny-dfr
 
-Touch Bar の表示を担当する `tiny-dfr` は、既定の設定(`/usr/share/tiny-dfr/config.toml` の `AdaptiveBrightness = true`)で、**画面の明るさが変わるたびに Touch Bar の明るさを画面に合わせて書き換えます**。実測では、画面の明るさを変えた 1〜2 秒後に Touch Bar の値が書き換わりました。
+With its default settings (`AdaptiveBrightness = true` in `/usr/share/tiny-dfr/config.toml`), `tiny-dfr` **rewrites the Touch Bar brightness to match the display every time the display brightness changes**. In testing, the Touch Bar value changed 1-2 seconds after the display brightness changed.
 
-その結果、画面の明るさを変えると次のようになります。
+As a result, changing the display brightness:
 
-- Touch Bar の明るさが tiny-dfr の計算値に変わる
-- 同期サービスはそれを手動調整とみなし、キーボードの明るさが次に変わるまで同期を止める
+- sets the Touch Bar to tiny-dfr's computed value, and
+- makes the sync service treat that as a manual change and pause until the keyboard brightness next changes.
 
-`omarchy-brightness-touchbar-setup tiny-dfr`([手順 3](#3-tiny-dfr-の自動調整を止める推奨))で tiny-dfr の自動調整を止めると、Touch Bar の明るさを書き込むのはこのツールだけになります。
+Turning off tiny-dfr adaptive brightness with `omarchy-brightness-touchbar-setup tiny-dfr` ([step 3](#3-turn-off-tiny-dfr-adaptive-brightness-recommended)) leaves this tool as the only writer of the Touch Bar brightness.
 
-`omarchy plugin add` はプラグイン内のスクリプトを実行しないので、この変更が自動で入ることはありません。root 権限が必要な手順はこれだけなので、本人が選んだときにだけ実行する形にしています。
+`omarchy plugin add` never runs plugin scripts, so this change is never made automatically. It is the only step that needs root, so it runs only when you choose it.
 
-## リポジトリ構成
+## Repository layout
 
 ```
-manifest.json      Omarchy シェルプラグインのマニフェスト(kind: bar-widget)
-Panel.qml          ステータスバーのウィジェットとパネル
-bin/               Touch Bar 用コマンド(セットアップで ~/.local/bin にリンク)
-systemd/           同期サービスのユニットファイル
-docs/              実装の解説
-reference/         参考にした Omarchy 本体のスクリプト(変更なしの写し)
+manifest.json      Omarchy shell plugin manifest (kind: bar-widget)
+Panel.qml          Status bar widget and panel
+bin/               Touch Bar commands (linked into ~/.local/bin by the setup)
+systemd/           Sync service unit file
+docs/              Implementation notes
 ```
 
-実装の詳細は [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) を参照してください。
+See [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) for implementation details.
