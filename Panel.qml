@@ -27,6 +27,9 @@ Panel {
   property string syncMode: "off"
   // The sync service, key bindings and PATH links come from the setup command.
   property bool setupDone: true
+  // tiny-dfr's AdaptiveBrightness rewrites the Touch Bar whenever the display
+  // brightness changes, overriding both this slider and the sync service.
+  property bool tinyDfrAdaptive: false
 
   readonly property string binDir: String(Qt.resolvedUrl("bin")).replace(/^file:\/\//, "")
 
@@ -44,14 +47,17 @@ Panel {
   // Cursor model shared by keyboard and mouse, as in the Display panel:
   //   "brightness" - single slider row, selectedIndex = -1 sentinel
   //   "sync"       - horizontal row of sync mode pills
+  //   "tinydfr"    - single fix button, only while tiny-dfr is adaptive
   property string focusSection: "brightness"
   property int selectedIndex: -1
   property bool cursorActive: false
 
-  readonly property var visibleSections: brightnessAvailable ? ["brightness", "sync"] : []
+  readonly property var visibleSections: !brightnessAvailable ? []
+    : tinyDfrAdaptive ? ["brightness", "sync", "tinydfr"] : ["brightness", "sync"]
 
   function sectionFirstIndex(section) {
     if (section === "brightness") return -1
+    if (section === "tinydfr") return 0
     return Math.max(0, syncModeIndex(syncMode))
   }
 
@@ -79,6 +85,7 @@ Panel {
   }
 
   function activateCursor() {
+    if (focusSection === "tinydfr") { runTinyDfrFix(); return }
     if (focusSection === "sync" && !setupDone) { runSetup(); return }
     if (focusSection === "sync" && selectedIndex >= 0 && selectedIndex < syncModes.length)
       setSyncMode(syncModes[selectedIndex].value)
@@ -115,6 +122,13 @@ Panel {
     if (!setupProc.running) setupProc.running = true
   }
 
+  // Writing /etc/tiny-dfr needs sudo, so it runs in a terminal that can prompt.
+  function runTinyDfrFix() {
+    setupProc.command = ["omarchy-launch-floating-terminal-with-presentation",
+                         root.binDir + "/omarchy-brightness-touchbar-setup tiny-dfr"]
+    if (!setupProc.running) setupProc.running = true
+  }
+
   function brightnessIpc(percent) {
     root.setBrightness(Number(percent))
     return "got " + root.pendingBrightnessPercent
@@ -124,7 +138,8 @@ Panel {
     return JSON.stringify({
       brightness: root.brightnessPercent,
       brightnessAvailable: root.brightnessAvailable,
-      syncMode: root.syncMode
+      syncMode: root.syncMode,
+      tinyDfrAdaptive: root.tinyDfrAdaptive
     })
   }
 
@@ -211,7 +226,8 @@ Panel {
     id: stateProc
     command: root.binCommand(["bash", "-c",
       "omarchy-brightness-touchbar || echo unavailable; omarchy-brightness-touchbar-sync-mode; "
-      + "[[ -f $HOME/.config/systemd/user/omarchy-brightness-touchbar-sync.service ]] && echo setup || echo missing"])
+      + "[[ -f $HOME/.config/systemd/user/omarchy-brightness-touchbar-sync.service ]] && echo setup || echo missing; "
+      + "omarchy-brightness-touchbar-setup tiny-dfr --check"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -222,6 +238,11 @@ Panel {
         var mode = String(lines[1] || "").trim()
         root.syncMode = root.syncModeIndex(mode) >= 0 ? mode : "off"
         root.setupDone = String(lines[2] || "").trim() !== "missing"
+        root.tinyDfrAdaptive = String(lines[3] || "").trim() === "adaptive"
+        if (!root.tinyDfrAdaptive && root.focusSection === "tinydfr") {
+          root.focusSection = "sync"
+          root.selectedIndex = root.sectionFirstIndex("sync")
+        }
       }
     }
   }
@@ -492,6 +513,52 @@ Panel {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
             width: parent.width
+          }
+        }
+
+        // ---------- tiny-dfr ----------
+        PanelSeparator {
+          visible: root.brightnessAvailable && root.tinyDfrAdaptive
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          visible: root.brightnessAvailable && root.tinyDfrAdaptive
+          width: parent.width
+          spacing: Style.space(10)
+
+          PanelSectionHeader {
+            text: "TINY-DFR"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            text: "tiny-dfr resets the Touch Bar whenever the display brightness changes."
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            width: parent.width
+          }
+
+          Button {
+            width: parent.width
+            text: "Turn off tiny-dfr adaptive brightness"
+            fontSize: Style.font.caption
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            verticalPadding: Style.spacing.controlPaddingY
+            bordered: true
+            hasCursor: root.cursorActive && root.focusSection === "tinydfr"
+            onClicked: root.runTinyDfrFix()
+            onHovered: function(isHovered) {
+              if (!isHovered) return
+              root.cursorActive = true
+              root.focusSection = "tinydfr"
+              root.selectedIndex = 0
+            }
           }
         }
 

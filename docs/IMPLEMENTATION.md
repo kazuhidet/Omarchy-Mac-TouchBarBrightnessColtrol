@@ -68,6 +68,25 @@ Touch Bar の輝度制御を Omarchy quattro の輝度まわりの仕様に合�
 - **コマンド**:`~/.local/bin` にシンボリックリンクを張ります。`omarchy plugin update`(fast-forward pull)だけで新しい版になります。ただし `omarchy plugin validate` はプラグインフォルダの**中に**シンボリックリンクがあると拒否するので、リンクは必ず外向き(`~/.local/bin` → プラグイン)にしています。
 - **systemd ユニット**:リンクではなくコピーします。検索パスの外にあるユニットへのリンクは、systemd では「linked unit」という別の扱いになるためです。quattro が `~/.config/systemd/user` を使わない方針にしているのはパッケージが配るユニットの話なので、ユーザーが自分で作ったユニットを置くのは問題ありません。
 - **キー割り当て**:`-- >>> kazu.touchbar bindings >>>` から `<<<` までのマーカーで囲んで追記します。`uninstall` ではこの範囲だけを削除します。手で書いた割り当てがすでにある場合は触りません。
+- **tiny-dfr**(`tiny-dfr [--check|--revert]`):root 権限が必要な唯一の手順なので、`install` には含めず、別のサブコマンドにしています。詳しくは次の節を参照してください。
+
+## tiny-dfr との競合
+
+tiny-dfr は `AdaptiveBrightness = true`(既定)のとき、画面の明るさが変わると Touch Bar の明るさを書き換えます。実測では、`apple-panel-bl` を 5 → 15 にすると Touch Bar が 79 → 22 になり、5 に戻すと 13 になりました。同期サービスはこれを手動調整と区別できないので、tiny-dfr の自動調整を止め、Touch Bar の明るさはこのツールだけが書き込む形にしています。
+
+配布するうえでの判断は次のとおりです。
+
+| 方法 | 採否 | 理由 |
+|---|---|---|
+| `setup tiny-dfr` で本人が選んだときに sudo で書く | 採用 | root が必要な変更を、内容を見せたうえで 1 回だけ行える |
+| `omarchy plugin add` で自動的に書く | 不採用 | Omarchy はプラグインのスクリプトを実行しない方針 |
+| パッケージで `/etc/tiny-dfr/config.toml` を配る | 不採用 | 利用者が自分で書いた設定ファイルとぶつかる |
+| polkit で常に許可する | 不採用 | 一度きりの設定変更のために常時の権限を渡すことになる |
+
+- **書く内容**:`/etc/tiny-dfr/config.toml` は `/usr/share/tiny-dfr/config.toml` に項目ごとに重ねて読まれるので、`AdaptiveBrightness = false` の 1 行だけで済みます。新しく作るファイルの先頭には `# Created by kazu.touchbar` の行を入れ、`--revert` ではファイルごと削除します。
+- **既存のファイルがある場合**:先頭に `# >>> kazu.touchbar >>>` 〜 `<<<` のブロックを足し、元の `AdaptiveBrightness` 行の先頭に `#kazu.touchbar# ` を付けてコメントにします。TOML ではキーの重複がエラーになるためです。ブロックを先頭に置くのは、`[table]` より前のトップレベルのキーとして読ませるためです。`--revert` ではブロックを消し、コメントを外します。
+- **反映**:書き換えたら `systemctl try-restart tiny-dfr` を実行します。tiny-dfr は起動時に Touch Bar を `ActiveBrightness` にするので、続けて同期サービスも再起動し、同期の値に戻します。
+- **パネル**:状態を読むときに `tiny-dfr --check`(`adaptive` / `static` / `none`)も実行します。`adaptive` なら TINY-DFR 欄とボタンを出します。ボタンを押すと、sudo のパスワードを入力できるようにターミナルで実行します。
 
 ## キー割り当ての方針
 
@@ -98,10 +117,9 @@ Omarchy の Mac 向け版(`default/hypr/bindings/media.lua`)は、SHIFT+輝度�
 
 - `hyprctl` を偽物に差し替える:PATH の先頭に置いたスクリプトで、DPMS オフの JSON を返す。こうすると実際の画面を消さずに、消灯と復帰の流れを確認できる。
 - `OMARCHY_BACKLIGHT_PATH` / `OMARCHY_LEDS_DIR` / `OMARCHY_IIO_DEVICES_DIR`:sysfs を偽のディレクトリに差し替えて、デバイス検出を確認できる。
+- `OMARCHY_TINY_DFR_DEFAULT` / `OMARCHY_TINY_DFR_CONF`:tiny-dfr の設定ファイルの場所を差し替えられる。`sudo` と `systemctl` を、引数をそのまま実行するだけの偽物に PATH で差し替えると、root 権限なしで `tiny-dfr` / `--revert` の動きを確認できる。
 - `omarchy-shell kazu.touchbar state`:パネルが持っている状態を JSON で確認できる。
 
 ## 今後の課題
-
-- **tiny-dfr との競合**:tiny-dfr は `AdaptiveBrightness = true` のとき、画面の明るさが変わると Touch Bar の明るさを書き換える。実測では、`apple-panel-bl` を 5 → 15 にすると Touch Bar が 79 → 22 になり、5 に戻すと 13 になった。同期サービスはこれを手動調整と区別できない。`/etc/tiny-dfr/config.toml` で `AdaptiveBrightness = false` にし、Touch Bar の明るさはこのツールだけが書き込む形にするのが本筋。
 
 - tiny-dfr の `backlight_high.svg`(Material Symbols)を、バーとパネルのアイコンに使う。`BarIconButton.iconComponent` に画像を差し込めば実現できる。OSD は文字しか表示できないので、OSD プラグインを複製しないと使えない。

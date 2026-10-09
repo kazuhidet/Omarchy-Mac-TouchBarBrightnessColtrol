@@ -60,6 +60,25 @@ omarchy bar move kazu.touchbar --after omarchy.monitor   # Display の右隣に�
 
 状態の確認は `omarchy-brightness-touchbar-setup status` で行えます。
 
+### 3. tiny-dfr の自動調整を止める(推奨)
+
+Touch Bar の表示を担当する tiny-dfr は、既定では画面の明るさに合わせて Touch Bar の明るさを書き換えます(詳しくは「[tiny-dfr との競合](#tiny-dfr-との競合)」)。このままだと、画面の明るさを変えるたびにスライダーや同期の設定が上書きされます。
+
+パネルに **TINY-DFR** 欄が出ている場合は **Turn off tiny-dfr adaptive brightness** を押すか、ターミナルで次を実行します。root 権限が必要なので `sudo` のパスワードを聞かれます。
+
+```bash
+~/.config/omarchy/plugins/kazu.touchbar/bin/omarchy-brightness-touchbar-setup tiny-dfr
+```
+
+このコマンドが行うことは次のとおりです。
+
+- `/etc/tiny-dfr/config.toml` に `AdaptiveBrightness = false` を書く
+  - ファイルがなければ、この 1 行だけのファイルを作ります。tiny-dfr は `/usr/share/tiny-dfr/config.toml` と項目ごとに組み合わせて読むので、ボタンの並びなど他の設定は変わりません。
+  - すでにファイルがあれば、`config.toml.bak.<時刻>` にバックアップしてから、先頭にマーカー付きでこの行を足します。元の `AdaptiveBrightness` の行はコメントにします。
+- tiny-dfr と同期サービスを再起動する
+
+元に戻すには `omarchy-brightness-touchbar-setup tiny-dfr --revert` を実行します(`uninstall` でも戻ります)。手で設定する場合は、`/etc/tiny-dfr/config.toml` に `AdaptiveBrightness = false` の 1 行を書いて `sudo systemctl restart tiny-dfr` を実行してください。
+
 ## 使い方
 
 ### ステータスバー
@@ -138,7 +157,7 @@ omarchy plugin update kazu.touchbar
 ## アンインストール
 
 ```bash
-omarchy-brightness-touchbar-setup uninstall   # サービス・リンク・追記したキー割り当てを削除
+omarchy-brightness-touchbar-setup uninstall   # サービス・リンク・追記したキー割り当て・tiny-dfr の変更を元に戻す
 omarchy plugin remove kazu.touchbar
 ```
 
@@ -152,8 +171,9 @@ omarchy plugin remove kazu.touchbar
 | 同期しない | `omarchy-brightness-touchbar-setup status`、`journalctl --user -u omarchy-brightness-touchbar-sync` |
 | Ambient を選ぶと Manual に戻る | 照度センサーが見つからず、サービスの起動条件チェックで止まっている。`ls /sys/bus/iio/devices/*/in_illuminance*` で確認 |
 | アイコンや QML の変更が反映されない | `omarchy restart shell` |
+| 画面の明るさを変えると Touch Bar の明るさも変わる | tiny-dfr の自動調整が有効。`omarchy-brightness-touchbar-setup tiny-dfr --check` が `adaptive` なら、[手順 3](#3-tiny-dfr-の自動調整を止める推奨) を実行 |
 
-## 既知の問題:tiny-dfr との競合
+## tiny-dfr との競合
 
 Touch Bar の表示を担当する `tiny-dfr` は、既定の設定(`/usr/share/tiny-dfr/config.toml` の `AdaptiveBrightness = true`)で、**画面の明るさが変わるたびに Touch Bar の明るさを画面に合わせて書き換えます**。実測では、画面の明るさを変えた 1〜2 秒後に Touch Bar の値が書き換わりました。
 
@@ -162,7 +182,9 @@ Touch Bar の表示を担当する `tiny-dfr` は、既定の設定(`/usr/share/
 - Touch Bar の明るさが tiny-dfr の計算値に変わる
 - 同期サービスはそれを手動調整とみなし、キーボードの明るさが次に変わるまで同期を止める
 
-対策として、`/etc/tiny-dfr/config.toml` で `AdaptiveBrightness = false` にする方法を検討しています(要 root)。
+`omarchy-brightness-touchbar-setup tiny-dfr`([手順 3](#3-tiny-dfr-の自動調整を止める推奨))で tiny-dfr の自動調整を止めると、Touch Bar の明るさを書き込むのはこのツールだけになります。
+
+`omarchy plugin add` はプラグイン内のスクリプトを実行しないので、この変更が自動で入ることはありません。root 権限が必要な手順はこれだけなので、本人が選んだときにだけ実行する形にしています。
 
 ## リポジトリ構成
 

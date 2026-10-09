@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # omarchy:summary=Install or remove the Touch Bar brightness commands, sync service and key bindings.
-# omarchy:args=<install [--bindings]|uninstall|status>
-# omarchy:examples=omarchy-brightness-touchbar-setup install | omarchy-brightness-touchbar-setup install --bindings | omarchy-brightness-touchbar-setup uninstall
+# omarchy:args=<install [--bindings]|tiny-dfr [--check|--revert]|uninstall|status>
+# omarchy:examples=omarchy-brightness-touchbar-setup install | omarchy-brightness-touchbar-setup install --bindings | omarchy-brightness-touchbar-setup tiny-dfr | omarchy-brightness-touchbar-setup uninstall
 
 # `omarchy plugin add` only clones the plugin: it never runs install hooks. This
 # finishes the parts outside the shell. Commands are symlinked into ~/.local/bin
 # so `omarchy plugin update` refreshes them in place; the unit is copied because
 # systemd treats a symlinked unit outside its search path as a linked unit.
+# `tiny-dfr` is the one step that needs root, so it is opt-in and asks for sudo.
 
 set -euo pipefail
 
@@ -29,8 +30,17 @@ commands=(
 begin_marker="-- >>> kazu.touchbar bindings >>>"
 end_marker="-- <<< kazu.touchbar bindings <<<"
 
+# tiny-dfr merges /etc/tiny-dfr/config.toml over the packaged defaults key by key,
+# so a single key in /etc is enough and survives tiny-dfr updates.
+tiny_dfr_default="${OMARCHY_TINY_DFR_DEFAULT:-/usr/share/tiny-dfr/config.toml}"
+tiny_dfr_conf="${OMARCHY_TINY_DFR_CONF:-/etc/tiny-dfr/config.toml}"
+tiny_dfr_created="# Created by kazu.touchbar (omarchy-brightness-touchbar-setup tiny-dfr)."
+tiny_dfr_begin="# >>> kazu.touchbar >>>"
+tiny_dfr_end="# <<< kazu.touchbar <<<"
+tiny_dfr_disabled="#kazu.touchbar# "
+
 usage() {
-  echo "Usage: omarchy-brightness-touchbar-setup <install [--bindings]|uninstall|status>"
+  echo "Usage: omarchy-brightness-touchbar-setup <install [--bindings]|tiny-dfr [--check|--revert]|uninstall|status>"
 }
 
 install_commands() {
@@ -83,6 +93,91 @@ EOF
   echo "Added key bindings to $bindings"
 }
 
+# Prints the AdaptiveBrightness value of a tiny-dfr config file, or nothing.
+tiny_dfr_value() {
+  [[ -f $1 ]] || return 0
+  sed -nE 's/^[[:space:]]*AdaptiveBrightness[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$1" | tail -n1
+}
+
+# adaptive: tiny-dfr rewrites the Touch Bar whenever the display brightness changes.
+# static: it leaves the level to us. none: tiny-dfr is not installed.
+tiny_dfr_check() {
+  local value
+
+  if [[ ! -f $tiny_dfr_default && ! -f $tiny_dfr_conf ]]; then
+    echo none
+    return
+  fi
+  value=$(tiny_dfr_value "$tiny_dfr_conf")
+  [[ -n $value ]] || value=$(tiny_dfr_value "$tiny_dfr_default")
+  # tiny-dfr defaults to adaptive when the key is missing altogether.
+  if [[ $value == false ]]; then echo static; else echo adaptive; fi
+}
+
+tiny_dfr_marked() {
+  [[ -f $tiny_dfr_conf ]] && grep -qxF -e "$tiny_dfr_begin" -e "$tiny_dfr_created" "$tiny_dfr_conf"
+}
+
+# Write the new config through sudo, keeping the old one next to it.
+tiny_dfr_write() {
+  local content=$1
+
+  if [[ -f $tiny_dfr_conf ]]; then
+    sudo cp -p "$tiny_dfr_conf" "$tiny_dfr_conf.bak.$(date +%s)"
+  fi
+  printf '%s\n' "$content" | sudo install -D -m 644 /dev/stdin "$tiny_dfr_conf"
+}
+
+# tiny-dfr only reads its config at start, and restarting it resets the Touch Bar
+# to ActiveBrightness, so restart the sync service after it to put our level back.
+tiny_dfr_restart() {
+  sudo systemctl try-restart tiny-dfr.service || true
+  systemctl --user try-restart "$unit" >/dev/null 2>&1 || true
+}
+
+tiny_dfr_apply() {
+  local state content
+
+  state=$(tiny_dfr_check)
+  case $state in
+    none) echo "tiny-dfr is not installed, nothing to change"; return ;;
+    static) echo "tiny-dfr adaptive brightness is already off"; return ;;
+  esac
+
+  echo "Turning off tiny-dfr adaptive brightness in $tiny_dfr_conf (needs sudo)"
+  if [[ -f $tiny_dfr_conf ]]; then
+    # Keys go first so they stay top level, and an existing AdaptiveBrightness
+    # line is commented out because TOML rejects a duplicate key.
+    content=$(printf '%s\nAdaptiveBrightness = false\n%s\n' "$tiny_dfr_begin" "$tiny_dfr_end"
+      sed -E "s/^([[:space:]]*AdaptiveBrightness[[:space:]]*=)/$tiny_dfr_disabled\1/" "$tiny_dfr_conf")
+  else
+    content=$(printf '%s\n# The Touch Bar brightness is set by omarchy-brightness-touchbar-sync instead.\nAdaptiveBrightness = false' "$tiny_dfr_created")
+  fi
+  tiny_dfr_write "$content"
+  tiny_dfr_restart
+  echo "tiny-dfr adaptive brightness is off"
+}
+
+tiny_dfr_revert() {
+  local content
+
+  if ! tiny_dfr_marked; then
+    echo "$tiny_dfr_conf has no kazu.touchbar changes"
+    return
+  fi
+
+  echo "Restoring $tiny_dfr_conf (needs sudo)"
+  if grep -qxF -e "$tiny_dfr_created" "$tiny_dfr_conf"; then
+    sudo rm -f "$tiny_dfr_conf"
+    sudo rmdir --ignore-fail-on-non-empty "$(dirname "$tiny_dfr_conf")"
+  else
+    content=$(sed -e "/^$tiny_dfr_begin\$/,/^$tiny_dfr_end\$/d" -e "s/^$tiny_dfr_disabled//" "$tiny_dfr_conf")
+    tiny_dfr_write "$content"
+  fi
+  tiny_dfr_restart
+  echo "tiny-dfr adaptive brightness is back to its configured value"
+}
+
 uninstall() {
   local cmd
 
@@ -105,6 +200,8 @@ uninstall() {
     hyprctl reload >/dev/null 2>&1 || true
     echo "Removed key bindings from $bindings"
   fi
+
+  tiny_dfr_marked && tiny_dfr_revert
 
   echo "Settings in ~/.config/omarchy/touchbar-sync.env were kept"
 }
@@ -130,6 +227,7 @@ status() {
   else
     echo "Key bindings: missing"
   fi
+  echo "tiny-dfr brightness: $(tiny_dfr_check)"
 }
 
 case "${1:-}" in
@@ -140,6 +238,14 @@ install)
   install_commands
   install_service
   if (( with_bindings )); then install_bindings; fi
+  ;;
+tiny-dfr)
+  case "${2:-}" in
+    "") tiny_dfr_apply ;;
+    --check) tiny_dfr_check ;;
+    --revert) tiny_dfr_revert ;;
+    *) usage >&2; exit 1 ;;
+  esac
   ;;
 uninstall)
   uninstall
