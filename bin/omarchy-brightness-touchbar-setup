@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# omarchy:summary=Install or remove the Touch Bar brightness commands, sync service and key bindings.
+# omarchy:args=<install [--bindings]|uninstall|status>
+# omarchy:examples=omarchy-brightness-touchbar-setup install | omarchy-brightness-touchbar-setup install --bindings | omarchy-brightness-touchbar-setup uninstall
+
+# `omarchy plugin add` only clones the plugin: it never runs install hooks. This
+# finishes the parts outside the shell. Commands are symlinked into ~/.local/bin
+# so `omarchy plugin update` refreshes them in place; the unit is copied because
+# systemd treats a symlinked unit outside its search path as a linked unit.
+
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+bin_dir="$plugin_dir/bin"
+user_bin="$HOME/.local/bin"
+unit=omarchy-brightness-touchbar-sync.service
+unit_dir="$HOME/.config/systemd/user"
+bindings="$HOME/.config/hypr/bindings.lua"
+
+commands=(
+  omarchy-hw-touchbar
+  omarchy-brightness-touchbar
+  omarchy-brightness-touchbar-sync
+  omarchy-brightness-touchbar-sync-mode
+  omarchy-brightness-touchbar-setup
+)
+
+begin_marker="-- >>> kazu.touchbar bindings >>>"
+end_marker="-- <<< kazu.touchbar bindings <<<"
+
+usage() {
+  echo "Usage: omarchy-brightness-touchbar-setup <install [--bindings]|uninstall|status>"
+}
+
+install_commands() {
+  local cmd
+  mkdir -p "$user_bin"
+  for cmd in "${commands[@]}"; do
+    # Replaces a hand-copied file from an earlier manual install as well.
+    ln -sfn "$bin_dir/$cmd" "$user_bin/$cmd"
+  done
+  echo "Linked commands into $user_bin"
+}
+
+install_service() {
+  mkdir -p "$unit_dir"
+  cp "$plugin_dir/systemd/$unit" "$unit_dir/$unit"
+  systemctl --user daemon-reload
+  if systemctl --user enable --now "$unit" >/dev/null 2>&1; then
+    echo "Enabled $unit"
+  else
+    echo "Installed $unit (start it from a graphical session: systemctl --user enable --now $unit)"
+  fi
+}
+
+# SHIFT+brightness stays on Omarchy's keyboard backlight; the Touch Bar follows it
+# through the sync service, and CTRL mirrors the display keys for manual control.
+install_bindings() {
+  [[ -f $bindings ]] || { echo "No $bindings, skipping key bindings"; return; }
+
+  if grep -qF -e "$begin_marker" "$bindings"; then
+    echo "Key bindings already present"
+    return
+  fi
+  if grep -q 'omarchy-brightness-touchbar' "$bindings"; then
+    echo "$bindings already binds omarchy-brightness-touchbar; leaving it as is"
+    return
+  fi
+
+  cp "$bindings" "$bindings.bak.$(date +%s)"
+  cat >>"$bindings" <<EOF
+
+$begin_marker
+-- Touch Bar brightness. CTRL mirrors the display keys, CTRL+ALT is the precise step like ALT+brightness.
+o.bind("CTRL + XF86MonBrightnessUp", "Touch Bar brightness up", "omarchy-brightness-touchbar +5%", { locked = true, repeating = true })
+o.bind("CTRL + XF86MonBrightnessDown", "Touch Bar brightness down", "omarchy-brightness-touchbar 5%-", { locked = true, repeating = true })
+o.bind("CTRL + ALT + XF86MonBrightnessUp", "Touch Bar brightness up precise", "omarchy-brightness-touchbar +1%", { locked = true, repeating = true })
+o.bind("CTRL + ALT + XF86MonBrightnessDown", "Touch Bar brightness down precise", "omarchy-brightness-touchbar 1%-", { locked = true, repeating = true })
+$end_marker
+EOF
+  hyprctl reload >/dev/null 2>&1 || true
+  echo "Added key bindings to $bindings"
+}
+
+uninstall() {
+  local cmd
+
+  systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+  rm -f "$unit_dir/$unit"
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  echo "Removed $unit"
+
+  # Only remove links that point back into this plugin, never someone else's file.
+  for cmd in "${commands[@]}"; do
+    if [[ -L $user_bin/$cmd && $(readlink -f "$user_bin/$cmd") == "$bin_dir/$cmd" ]]; then
+      rm -f "$user_bin/$cmd"
+    fi
+  done
+  echo "Removed command links from $user_bin"
+
+  if [[ -f $bindings ]] && grep -qF -e "$begin_marker" "$bindings"; then
+    cp "$bindings" "$bindings.bak.$(date +%s)"
+    sed -i "/^$begin_marker\$/,/^$end_marker\$/d" "$bindings"
+    hyprctl reload >/dev/null 2>&1 || true
+    echo "Removed key bindings from $bindings"
+  fi
+
+  echo "Settings in ~/.config/omarchy/touchbar-sync.env were kept"
+}
+
+status() {
+  local cmd target
+
+  echo "Plugin: $plugin_dir"
+  echo "Touch Bar: $("$bin_dir/omarchy-hw-touchbar" 2>/dev/null || echo "not found")"
+  for cmd in "${commands[@]}"; do
+    target=$(readlink -f "$user_bin/$cmd" 2>/dev/null || true)
+    if [[ $target == "$bin_dir/$cmd" ]]; then
+      echo "  $cmd: linked"
+    elif [[ -e $user_bin/$cmd ]]; then
+      echo "  $cmd: other file"
+    else
+      echo "  $cmd: missing"
+    fi
+  done
+  echo "Service: $(systemctl --user is-enabled "$unit" 2>/dev/null || echo "not installed"), $(systemctl --user is-active "$unit" 2>/dev/null || true)"
+  if [[ -f $bindings ]] && grep -q 'omarchy-brightness-touchbar' "$bindings"; then
+    echo "Key bindings: present"
+  else
+    echo "Key bindings: missing"
+  fi
+}
+
+case "${1:-}" in
+install)
+  shift
+  with_bindings=0
+  [[ ${1:-} == "--bindings" ]] && with_bindings=1
+  install_commands
+  install_service
+  if (( with_bindings )); then install_bindings; fi
+  ;;
+uninstall)
+  uninstall
+  ;;
+status)
+  status
+  ;;
+-h | --help)
+  usage
+  ;;
+*)
+  usage >&2
+  exit 1
+  ;;
+esac

@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# omarchy:summary=Show or switch how the Touch Bar backlight is synced.
+# omarchy:args=[keyboard|ambient|off]
+# omarchy:examples=omarchy-brightness-touchbar-sync-mode | omarchy-brightness-touchbar-sync-mode ambient | omarchy-brightness-touchbar-sync-mode off
+
+# Settings live in the env file the sync service reads, so the Touch Bar panel,
+# this command and a hand-edited file all agree on one source of truth.
+
+unit=omarchy-brightness-touchbar-sync.service
+env_file="$HOME/.config/omarchy/touchbar-sync.env"
+
+current_mode() {
+  local mode=""
+
+  if ! systemctl --user is-active --quiet "$unit"; then
+    echo off
+    return
+  fi
+
+  [[ -r $env_file ]] && mode=$(sed -n 's/^OMARCHY_TOUCHBAR_SYNC_MODE=//p' "$env_file" | tail -n1)
+  echo "${mode:-keyboard}"
+}
+
+if (( $# == 0 )); then
+  current_mode
+  exit
+fi
+
+case "$1" in
+keyboard | ambient)
+  if [[ ! -f $HOME/.config/systemd/user/$unit ]]; then
+    echo "The sync service is not installed; run: omarchy-brightness-touchbar-setup install" >&2
+    exit 1
+  fi
+  mkdir -p "${env_file%/*}"
+  touch "$env_file"
+  # Keep any other settings (e.g. OMARCHY_TOUCHBAR_SYNC_MIN) as they are.
+  sed -i '/^OMARCHY_TOUCHBAR_SYNC_MODE=/d' "$env_file"
+  echo "OMARCHY_TOUCHBAR_SYNC_MODE=$1" >>"$env_file"
+  systemctl --user enable "$unit" >/dev/null 2>&1
+  systemctl --user restart "$unit"
+  ;;
+off)
+  systemctl --user disable --now "$unit" >/dev/null 2>&1
+  ;;
+*)
+  echo "Usage: omarchy-brightness-touchbar-sync-mode [keyboard|ambient|off]" >&2
+  exit 1
+  ;;
+esac
+
+current_mode

@@ -1,0 +1,276 @@
+#!/bin/bash
+
+# omarchy:summary=Keep the Touch Bar backlight in step with the keyboard backlight or ambient light
+# omarchy:args=[--mode keyboard|ambient] [--min N] [--once|--available]
+# omarchy:examples=omarchy-brightness-touchbar-sync | omarchy-brightness-touchbar-sync --min 40 | omarchy-brightness-touchbar-sync --mode ambient
+
+# keyboard mode follows the keyboard backlight with a floor: the Touch Bar is a
+# display, so it must stay readable when keyboard auto-brightness turns the keys
+# off in a bright room. ambient mode drives it from the light sensor instead,
+# brighter in brighter rooms like the main display.
+# In both modes the Touch Bar goes dark while the internal display is blanked
+# (lock idle, DPMS off) or the lid is closed, and comes back at its previous level.
+# A manual change (omarchy-brightness-touchbar) pauses syncing until the keyboard
+# backlight changes, or ambient light moves enough that the old choice no longer fits.
+# Turning it off by hand (omarchy-brightness-touchbar off) stays off until turned back on.
+
+set -euo pipefail
+
+POLL_SECONDS=1
+DARK_LUX=8
+BRIGHT_LUX=400
+DEADBAND_PERCENT=4
+OVERRIDE_LUX_DELTA=20
+OVERRIDE_LUX_RATIO=40
+
+mode="${OMARCHY_TOUCHBAR_SYNC_MODE:-keyboard}"
+min_percent="${OMARCHY_TOUCHBAR_SYNC_MIN:-30}"
+once=0
+available_only=0
+
+usage() {
+  echo "Usage: omarchy-brightness-touchbar-sync [--mode keyboard|ambient] [--min N] [--once|--available]"
+}
+
+while (($#)); do
+  case "$1" in
+    --mode)
+      [[ -n ${2:-} ]] || { usage >&2; exit 1; }
+      mode=$2
+      shift 2
+      ;;
+    --min)
+      [[ -n ${2:-} ]] || { usage >&2; exit 1; }
+      min_percent=$2
+      shift 2
+      ;;
+    --once)
+      once=1
+      shift
+      ;;
+    --available)
+      available_only=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+[[ $mode == keyboard || $mode == ambient ]] || { echo "mode must be keyboard or ambient" >&2; exit 1; }
+[[ $min_percent =~ ^[0-9]+$ ]] && (( min_percent <= 100 )) || { echo "min must be 0-100" >&2; exit 1; }
+
+find_touchbar() {
+  local device
+  device=$(omarchy-hw-touchbar 2>/dev/null) || return 1
+  printf '%s\n' "${OMARCHY_BACKLIGHT_PATH:-/sys/class/backlight}/$device"
+}
+
+find_kbd() {
+  local candidate
+  local leds_dir=${OMARCHY_LEDS_DIR:-/sys/class/leds}
+
+  for candidate in "$leds_dir"/*kbd_backlight*; do
+    if [[ -r $candidate/brightness && -r $candidate/max_brightness ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_als() {
+  local d name
+  local iio_devices_dir=${OMARCHY_IIO_DEVICES_DIR:-/sys/bus/iio/devices}
+
+  # Prefer a device that names itself as ALS: Apple AOP also exposes the lid-angle sensor.
+  for d in "$iio_devices_dir"/iio:device*; do
+    [[ -r $d/name ]] || continue
+    name=$(<"$d/name")
+    [[ $name == *als* ]] || continue
+    if [[ -r $d/in_illuminance_input ]]; then
+      printf '%s\n' "$d/in_illuminance_input"
+      return 0
+    fi
+    if [[ -r $d/in_illuminance_raw ]]; then
+      printf '%s\n' "$d/in_illuminance_raw"
+      return 0
+    fi
+  done
+
+  for d in "$iio_devices_dir"/iio:device*; do
+    if [[ -r $d/in_illuminance_input ]]; then
+      printf '%s\n' "$d/in_illuminance_input"
+      return 0
+    fi
+    if [[ -r $d/in_illuminance_raw ]]; then
+      printf '%s\n' "$d/in_illuminance_raw"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The source the Touch Bar follows: the keyboard LED, or the light sensor.
+find_source() {
+  if [[ $mode == keyboard ]]; then
+    find_kbd
+  else
+    find_als
+  fi
+}
+
+tb_path=$(find_touchbar || true)
+source_path=$(find_source || true)
+
+if (( available_only )); then
+  [[ -n $tb_path && -n $source_path ]]
+  exit
+fi
+
+if [[ -z $tb_path || -z $source_path ]]; then
+  exit 0
+fi
+
+# The keyboard LED is a directory; the light sensor is the value file itself.
+source_value=$source_path
+[[ $mode == keyboard ]] && source_value=$source_path/brightness
+
+tb_device=${tb_path##*/}
+tb_max=$(<"$tb_path/max_brightness")
+[[ $tb_max =~ ^[1-9][0-9]*$ ]] || exit 0
+
+last_set=""
+paused=0
+pause_value=0
+blanked=0
+saved=0
+
+# Blanked by the lock screen idle timer or DPMS: every internal panel is lit off.
+internal_display_off() {
+  hyprctl monitors -j 2>/dev/null |
+    jq -e '[.[] | select(.name | test("^(eDP|LVDS|DSI)-"))] | length > 0 and all(.dpmsStatus | not)' >/dev/null 2>&1
+}
+
+lid_closed() {
+  omarchy-hw-laptop-closed >/dev/null 2>&1
+}
+
+read_int() {
+  local raw
+  raw=$(<"$1") || return 1
+  raw=${raw%%.*}
+  [[ $raw =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$raw"
+}
+
+set_touchbar() {
+  brightnessctl -d "$tb_device" set "$1" >/dev/null
+  last_set=$(read_int "$tb_path/brightness" || echo "$1")
+}
+
+# Target Touch Bar percentage for the current source value.
+target_percent() {
+  local value=$1 kbd_max
+
+  if [[ $mode == keyboard ]]; then
+    kbd_max=$(read_int "$source_path/max_brightness") || return 1
+    (( kbd_max > 0 )) || return 1
+    echo $(( min_percent + value * (100 - min_percent) / kbd_max ))
+  elif (( value <= DARK_LUX )); then
+    echo "$min_percent"
+  elif (( value >= BRIGHT_LUX )); then
+    echo 100
+  else
+    echo $(( min_percent + (100 - min_percent) * (value - DARK_LUX) / (BRIGHT_LUX - DARK_LUX) ))
+  fi
+}
+
+# Whether the source moved far enough from where the user paused syncing.
+source_moved() {
+  local value=$1 delta threshold
+
+  if [[ $mode == keyboard ]]; then
+    (( value != pause_value ))
+    return
+  fi
+
+  delta=$(( value - pause_value ))
+  (( delta < 0 )) && delta=$(( -delta ))
+  threshold=$OVERRIDE_LUX_DELTA
+  if (( pause_value * OVERRIDE_LUX_RATIO / 100 > threshold )); then
+    threshold=$(( pause_value * OVERRIDE_LUX_RATIO / 100 ))
+  fi
+  (( delta >= threshold ))
+}
+
+tick() {
+  local current value percent target delta
+
+  current=$(read_int "$tb_path/brightness") || return 0
+
+  if internal_display_off || lid_closed; then
+    if (( ! blanked )); then
+      saved=$current
+      blanked=1
+      set_touchbar 0
+    fi
+    return 0
+  fi
+
+  if (( blanked )); then
+    blanked=0
+    # Bring back the level from before blanking, manual or synced alike.
+    (( saved > 0 )) && set_touchbar "$saved"
+    (( saved > 0 )) && return 0
+  fi
+
+  value=$(read_int "$source_value") || return 0
+
+  if [[ -n $last_set && $current != "$last_set" ]]; then
+    paused=1
+    pause_value=$value
+    last_set=$current
+    return 0
+  fi
+
+  if (( paused )); then
+    (( current == 0 )) && return 0
+    source_moved "$value" || return 0
+    paused=0
+  fi
+
+  percent=$(target_percent "$value") || return 0
+  (( percent > 100 )) && percent=100
+  target=$(( tb_max * percent / 100 ))
+  (( target < 1 )) && target=1
+
+  # Ambient light jitters: skip changes too small to notice.
+  delta=$(( current - target ))
+  (( delta < 0 )) && delta=$(( -delta ))
+  if [[ $mode == ambient ]] && (( delta * 100 < tb_max * DEADBAND_PERCENT )); then
+    last_set=$current
+    return 0
+  fi
+
+  (( current == target )) && { last_set=$current; return 0; }
+  set_touchbar "$target"
+}
+
+tick
+
+if (( once )); then
+  exit 0
+fi
+
+while true; do
+  sleep "$POLL_SECONDS"
+  tick
+done

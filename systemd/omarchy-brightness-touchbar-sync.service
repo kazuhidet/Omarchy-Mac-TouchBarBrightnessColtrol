@@ -1,0 +1,17 @@
+[Unit]
+Description=Omarchy Touch Bar backlight synced to keyboard backlight or ambient light
+After=graphical-session.target omarchy-brightness-keyboard-auto.service
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+# Optional settings: OMARCHY_TOUCHBAR_SYNC_MODE=keyboard|ambient, OMARCHY_TOUCHBAR_SYNC_MIN=0-100
+EnvironmentFile=-%h/.config/omarchy/touchbar-sync.env
+ExecCondition=%h/.local/bin/omarchy-brightness-touchbar-sync --available
+ExecStart=%h/.local/bin/omarchy-brightness-touchbar-sync
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

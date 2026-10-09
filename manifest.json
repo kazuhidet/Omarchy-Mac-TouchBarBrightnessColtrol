@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "kazu.touchbar",
+  "name": "Touch Bar",
+  "version": "1.0.0",
+  "author": "kazu",
+  "description": "Touch Bar brightness slider and sync mode",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Touch Bar",
+    "description": "Touch Bar brightness slider and sync mode",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

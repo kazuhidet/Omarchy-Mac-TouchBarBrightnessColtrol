@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# omarchy:summary=Print the most likely Touch Bar backlight device.
+# omarchy:examples=omarchy-hw-touchbar
+
+backlight_path="${OMARCHY_BACKLIGHT_PATH:-/sys/class/backlight}"
+
+device=""
+
+# T2 Macs: the appletbdrm/hid-appletb-bl driver registers a dedicated backlight.
+# Apple Silicon MacBook Pros: the Touch Bar's own MIPI panel registers a DSI backlight
+# (apple,summit, e.g. 228600000.dsi.0). Match it by its devicetree compatible so the
+# DCP panel backlight (apple-panel-bl) is never picked up by mistake.
+for candidate in "$backlight_path"/appletb_backlight "$backlight_path"/*; do
+  [[ -e $candidate ]] || continue
+
+  if [[ ${candidate##*/} == appletb_backlight ]] ||
+    tr '\0' '\n' 2>/dev/null <"$candidate/device/of_node/compatible" | grep -qx 'apple,summit'; then
+    device="${candidate##*/}"
+    break
+  fi
+done
+
+if [[ -n $device ]]; then
+  printf '%s\n' "$device"
+else
+  exit 1
+fi

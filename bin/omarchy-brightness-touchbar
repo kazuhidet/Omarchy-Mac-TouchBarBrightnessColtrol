@@ -1,0 +1,87 @@
+#!/bin/bash
+
+# omarchy:summary=Show or adjust brightness on the Touch Bar.
+# omarchy:args=[--no-osd] [+N%|N%-|N%|off|on]
+# omarchy:examples=omarchy-brightness-touchbar | omarchy-brightness-touchbar +5% | omarchy-brightness-touchbar 50% | omarchy-brightness-touchbar off | omarchy-brightness-touchbar on
+# Lives in ~/.local/bin: the omarchy dispatcher only routes packaged commands, so call it directly.
+
+no_osd=0
+
+# OSD icon for the Touch Bar, kept distinct from the display's monitor glyph.
+# omarchy-osd shows any name it does not recognize as a literal glyph, so a Nerd Font
+# character works here (default: nf-md-keyboard_variant; the keyboard backlight OSD uses nf-md-keyboard).
+osd_icon="${OMARCHY_TOUCHBAR_OSD_ICON:-󰌓}"
+
+while (( $# > 0 )); do
+  case "$1" in
+  --no-osd)
+    no_osd=1
+    shift
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
+
+# Get the brightness percentage of the passed Touch Bar backlight device
+backlight_brightness() {
+  brightnessctl -d "$1" -m 2>/dev/null | awk -F, '{ gsub("%", "", $4); print $4; found=1 } END{ exit !found }'
+}
+
+# Most likely Touch Bar backlight device
+device="$(omarchy-hw-touchbar)" || exit 1
+
+if (( $# == 0 )); then
+  backlight_brightness "$device"
+  exit
+fi
+
+step="$1"
+
+# Drop overlapping Touch Bar brightness key events so concurrent invocations do not race.
+# Holding the key down fires repeated invocations that could otherwise glitch OSD rendering.
+exec {lock_fd}>"${XDG_RUNTIME_DIR:-/tmp}/omarchy-brightness-touchbar.lock"
+flock -n "$lock_fd" || exit 0
+
+if [[ $step == "off" ]]; then
+  # Remember the current Touch Bar brightness so "on" can bring it back.
+  brightnessctl -d "$device" --save set 0 >/dev/null
+  exit 0
+elif [[ $step == "on" ]]; then
+  # Only restore when the Touch Bar is actually dark, so "on" never clobbers a later adjustment.
+  (( $(backlight_brightness "$device") > 0 )) && exit 0
+  brightnessctl -d "$device" --restore >/dev/null 2>&1 || brightnessctl -d "$device" set 50% >/dev/null
+  exit 0
+fi
+
+# Current Touch Bar brightness percentage
+current=$(backlight_brightness "$device") || exit 1
+
+# Apply non-uniform step size: 1% steps if at or below 5%, otherwise set an absolute
+# target percentage so rounding on the coarse Touch Bar backlight scale (e.g. 0-255) keeps OSD steps even.
+if [[ $step == "+5%" ]]; then
+  if (( current < 5 )); then
+    (( target = current + 1 ))
+  else
+    (( target = current + 5 ))
+  fi
+
+  (( target > 100 )) && target=100
+  step="$target%"
+elif [[ $step == "5%-" ]]; then
+  if (( current <= 5 )); then
+    (( target = current - 1 ))
+  else
+    (( target = current - 5 ))
+  fi
+
+  (( target < 1 )) && target=1
+  step="$target%"
+fi
+
+# Set brightness of the Touch Bar device.
+brightnessctl -d "$device" set "$step" >/dev/null
+
+# Show the new Touch Bar brightness in OSD
+(( no_osd )) || omarchy-osd -i "$osd_icon" -p "$(backlight_brightness "$device")"
